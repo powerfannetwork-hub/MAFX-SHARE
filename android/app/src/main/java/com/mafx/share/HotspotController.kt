@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import java.util.concurrent.Executor
 
 class HotspotController(context: Context) {
 
@@ -19,10 +18,6 @@ class HotspotController(context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val executor = Executor { command ->
-        mainHandler.post(command)
-    }
-
     var onHotspotReady: ((ssid: String, password: String) -> Unit)? = null
     var onHotspotStopped: (() -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -31,9 +26,7 @@ class HotspotController(context: Context) {
 
     fun startHotspot() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            onError?.invoke(
-                "This Android version does not support this hotspot method."
-            )
+            onError?.invoke("This Android version does not support this hotspot method.")
             return
         }
 
@@ -67,17 +60,14 @@ class HotspotController(context: Context) {
                 }
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                wifiManager.startLocalOnlyHotspot(callback, executor)
-            } else {
-                @Suppress("DEPRECATION")
-                wifiManager.startLocalOnlyHotspot(callback, mainHandler)
-            }
+            // Correct overload: callback first, Handler second.
+            @Suppress("DEPRECATION")
+            wifiManager.startLocalOnlyHotspot(callback, mainHandler)
 
         } catch (e: SecurityException) {
             isStarting = false
             onError?.invoke(
-                "Permission denied. Allow the required Wi-Fi permissions."
+                "Permission denied. Check the required Wi-Fi permissions."
             )
         } catch (e: Exception) {
             isStarting = false
