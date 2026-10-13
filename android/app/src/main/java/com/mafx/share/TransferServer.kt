@@ -15,7 +15,11 @@ import java.net.SocketException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Receives one file at a time over TCP and saves it to Downloads/MAFX SHARE. */
+/**
+ * Receives one file at a time over TCP and saves it to Downloads/MAFX SHARE.
+ *
+ * Wire format: writeUTF(filename), writeLong(fileSize), then exactly fileSize bytes.
+ */
 class TransferServer(
     context: Context,
     private val port: Int = DEFAULT_PORT
@@ -47,19 +51,30 @@ class TransferServer(
                     onStarted?.invoke(server.localPort)
 
                     while (running.get()) {
-                        try {
-                            server.accept().use { socket ->
-                                socket.soTimeout = 120_000
-                                receiveFile(socket)
-                            }
+                        val socket = try {
+                            server.accept()
                         } catch (e: SocketException) {
-                            if (running.get()) throw e
+                            // Closing the server socket is the normal way to stop the server.
+                            if (!running.get()) break
+                            throw e
+                        }
+
+                        // A bad or interrupted transfer must not terminate the listening server.
+                        socket.use { client ->
+                            try {
+                                client.soTimeout = 120_000
+                                receiveFile(client)
+                            } catch (e: Exception) {
+                                if (running.get()) {
+                                    onError?.invoke(e.message ?: "Unable to receive this file.")
+                                }
+                            }
                         }
                     }
                 }
             } catch (e: Exception) {
                 if (running.get()) {
-                    onError?.invoke(e.message ?: "Unable to receive file.")
+                    onError?.invoke(e.message ?: "Unable to start the file receiver.")
                 }
             } finally {
                 serverSocket = null
@@ -76,7 +91,7 @@ class TransferServer(
         if (filename.isBlank()) throw IOException("Invalid filename.")
         if (fileSize < 0L) throw IOException("Invalid file size.")
 
-        // Stream data in fixed-size chunks; the complete file is never loaded into RAM.
+        // Stream data in chunks; never load the entire file into memory.
         val uri = createDestination(filename)
         var received = 0L
         var completed = false
@@ -92,12 +107,15 @@ class TransferServer(
                     val wanted = minOf(buffer.size.toLong(), fileSize - received).toInt()
                     val count = input.read(buffer, 0, wanted)
 
-                    if (count < 0) throw IOException("Transfer interrupted before the file was complete.")
+                    if (count < 0) {
+                        throw IOException("Transfer interrupted before the file was complete.")
+                    }
                     if (count == 0) continue
 
                     out.write(buffer, 0, count)
                     received += count.toLong()
                 }
+
                 out.flush()
             }
 
@@ -110,7 +128,7 @@ class TransferServer(
                 try {
                     appContext.contentResolver.delete(uri, null, null)
                 } catch (_: Exception) {
-                    // Keep the original transfer error.
+                    // Preserve the original transfer error.
                 }
             }
         }
@@ -148,7 +166,9 @@ class TransferServer(
                 put(MediaStore.MediaColumns.IS_PENDING, 0)
             }
             val updated = appContext.contentResolver.update(uri, values, null, null)
-            if (updated <= 0) throw IOException("Could not finalize the received file.")
+            if (updated <= 0) {
+                throw IOException("Could not finalize the received file.")
+            }
         }
     }
 
