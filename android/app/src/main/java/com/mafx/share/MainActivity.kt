@@ -5,7 +5,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.database.Cursor
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pDevice
@@ -13,16 +13,18 @@ import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.zxing.integration.android.IntentIntegrator
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -44,8 +46,9 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     private val green = Color.rgb(22, 163, 74)
     private val blue = Color.rgb(37, 99, 235)
     private val port = TransferProtocol.PORT
-    private val pickFileRequest = 1001
-    private val wifiPermissionRequest = 1002
+
+    private val pickerRequest = 1001
+    private val permissionRequest = 1002
 
     private val executor = Executors.newCachedThreadPool()
     private val receiving = AtomicBoolean(false)
@@ -53,125 +56,188 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     @Volatile
     private var serverSocket: ServerSocket? = null
 
-    private var layout: LinearLayout? = null
-    private var status: TextView? = null
-    private var progress: ProgressBar? = null
+    private var root: LinearLayout? = null
+    private var statusText: TextView? = null
+    private var progressBar: ProgressBar? = null
     private var wifiDirect: WifiDirectManager? = null
 
-    private var discoveredPeers: List<WifiP2pDevice> = emptyList()
-    private var connectedInfo: WifiP2pInfo? = null
+    private var peers: List<WifiP2pDevice> = emptyList()
+    private var connectionInfo: WifiP2pInfo? = null
+
+    private var pendingFiles: List<Uri> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = green
         window.navigationBarColor = Color.WHITE
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+
+        @Suppress("DEPRECATION")
+        run {
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
 
         wifiDirect = WifiDirectManager(this, this)
         showHome()
     }
 
     private fun showHome() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-            setBackgroundColor(Color.WHITE)
+        val page = newPage()
+
+        addText(page, "MAFX SHARE", 32f, green)
+        addText(page, "FAST • SIMPLE • SECURE", 15f, Color.DKGRAY)
+
+        space(page, 28)
+
+        addButton(page, "CONNECT DEVICES", blue) {
+            requestWifiPermissions()
         }
 
-        layout = root
+        space(page, 12)
 
-        root.addView(
-            TextView(this).apply {
-                text = "MAFX SHARE"
-                textSize = 30f
-                setTextColor(green)
-                gravity = Gravity.CENTER
+        addButton(page, "SEND FILES", green) {
+            openFilePicker()
+        }
+
+        space(page, 12)
+
+        addButton(page, "RECEIVE FILES", blue) {
+            startReceiving()
+        }
+
+        space(page, 12)
+
+        addButton(page, "SCAN CONNECTION QR", green) {
+            scanConnectionQr()
+        }
+
+        space(page, 22)
+
+        addText(
+            page,
+            if (connectionInfo?.groupFormed == true) {
+                "Wi-Fi Direct: Connected"
+            } else {
+                "Wi-Fi Direct: Not connected"
             },
-            matchWidth()
+            14f,
+            Color.DKGRAY
         )
 
-        root.addView(
-            TextView(this).apply {
-                text = "Fast • Simple • Secure"
-                textSize = 16f
-                setTextColor(Color.DKGRAY)
-                gravity = Gravity.CENTER
-            },
-            matchWidth()
-        )
-
-        addSpace(root, 28)
-
-        root.addView(
-            makeButton("CONNECT DEVICES", blue) {
-                requestWifiPermissionsAndDiscover()
-            },
-            matchWidth()
-        )
-
-        addSpace(root, 12)
-
-        root.addView(
-            makeButton("SEND FILES", green) {
-                openFilePicker()
-            },
-            matchWidth()
-        )
-
-        addSpace(root, 12)
-
-        root.addView(
-            makeButton("RECEIVE FILES", blue) {
-                startReceiving()
-            },
-            matchWidth()
-        )
-
-        addSpace(root, 20)
-
-        root.addView(
-            TextView(this).apply {
-                text = if (connectedInfo?.groupFormed == true) {
-                    "Wi-Fi Direct: Connected"
-                } else {
-                    "Wi-Fi Direct: Not connected"
-                }
-                textSize = 14f
-                gravity = Gravity.CENTER
-                setTextColor(Color.DKGRAY)
-            },
-            matchWidth()
-        )
-
-        setContentView(root)
+        setContentView(page)
     }
 
-    private fun requestWifiPermissionsAndDiscover() {
-        val permissions = requiredWifiPermissions()
-        val missing = permissions.filter {
-            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+    private fun newPage(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(22), dp(24), dp(22), dp(24))
+            setBackgroundColor(Color.WHITE)
+        }.also {
+            root = it
+        }
+    }
+
+    private fun addText(
+        parent: LinearLayout,
+        value: String,
+        size: Float,
+        color: Int
+    ): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+            parent.addView(this, matchWidth())
+        }
+    }
+
+    private fun addButton(
+        parent: LinearLayout,
+        label: String,
+        color: Int,
+        action: () -> Unit
+    ) {
+        parent.addView(
+            Button(this).apply {
+                text = label
+                setTextColor(Color.WHITE)
+                setBackgroundColor(color)
+                setOnClickListener { action() }
+            },
+            matchWidth()
+        )
+    }
+
+    private fun space(parent: LinearLayout, height: Int) {
+        parent.addView(
+            View(this),
+            LinearLayout.LayoutParams(1, dp(height))
+        )
+    }
+
+    private fun matchWidth() = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT
+    )
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun toast(message: String) {
+        runOnUiThread {
+            Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun updateStatus(message: String) {
+        runOnUiThread {
+            statusText?.text = message
+        }
+    }
+
+    private fun updateProgress(
+        percent: Int,
+        message: String
+    ) {
+        runOnUiThread {
+            progressBar?.progress = percent.coerceIn(0, 100)
+            statusText?.text = message
+        }
+    }
+
+    // ---------------------------------------------------------
+    // WI-FI DIRECT
+    // ---------------------------------------------------------
+
+    private fun requestWifiPermissions() {
+        val permission = if (Build.VERSION.SDK_INT >= 33) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
         }
 
-        if (missing.isNotEmpty()) {
+        if (checkSelfPermission(permission) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
             requestPermissions(
-                missing.toTypedArray(),
-                wifiPermissionRequest
+                arrayOf(permission),
+                permissionRequest
             )
             return
         }
 
-        initializeAndDiscover()
-    }
+        wifiDirect?.initialize()
+        wifiDirect?.discoverPeers()
 
-    private fun requiredWifiPermissions(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= 33) {
-            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        showPeers()
     }
 
     override fun onRequestPermissionsResult(
@@ -185,146 +251,102 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             grantResults
         )
 
-        if (requestCode != wifiPermissionRequest) return
-
-        if (grantResults.isNotEmpty() &&
-            grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-        ) {
-            initializeAndDiscover()
-        } else {
-            showMessage(
-                "Permission required",
-                "Allow the required nearby-device permission to use Wi-Fi Direct."
-            )
+        if (requestCode == permissionRequest) {
+            if (grantResults.isNotEmpty() &&
+                grantResults.all {
+                    it == PackageManager.PERMISSION_GRANTED
+                }
+            ) {
+                wifiDirect?.initialize()
+                wifiDirect?.discoverPeers()
+                showPeers()
+            } else {
+                toast("Permission is required to discover nearby devices.")
+            }
         }
     }
 
-    private fun initializeAndDiscover() {
-        wifiDirect?.initialize()
-        wifiDirect?.discoverPeers()
-
-        updateStatus("Searching for nearby devices...")
-        showPeerList()
-    }
-
-    private fun showPeerList() {
-        val names = discoveredPeers.map { device ->
-            val deviceName = device.deviceName
-                .takeIf { it.isNotBlank() }
-                ?: "Unnamed device"
-
-            "$deviceName\n${device.deviceAddress}\n${deviceStatus(device.status)}"
+    private fun showPeers() {
+        val labels = peers.map {
+            val name = it.deviceName.ifBlank { "Unknown device" }
+            "$name\n${it.deviceAddress}"
         }.toTypedArray()
 
         AlertDialog.Builder(this)
             .setTitle("Nearby devices")
             .setMessage(
-                if (names.isEmpty()) {
-                    "Searching for devices...\n\n" +
-                        "Keep Wi-Fi enabled on both phones. " +
-                        "The other phone may need to open its sharing screen."
+                if (labels.isEmpty()) {
+                    "Searching for nearby devices. " +
+                        "Keep Wi-Fi enabled on both phones."
                 } else {
-                    "Select a device to connect."
+                    "Choose a device to connect."
                 }
             )
-            .setItems(names) { _, index ->
-                val device = discoveredPeers.getOrNull(index)
-                if (device != null) {
-                    connectToDevice(device)
+            .setItems(labels) { _, index ->
+                peers.getOrNull(index)?.let { device ->
+                    updateStatus("Connecting to ${device.deviceName}...")
+                    wifiDirect?.connect(device)
                 }
             }
             .setPositiveButton("SEARCH AGAIN") { _, _ ->
-                requestWifiPermissionsAndDiscover()
+                requestWifiPermissions()
             }
             .setNegativeButton("CLOSE", null)
             .show()
     }
 
-    private fun deviceStatus(status: Int): String {
-        return when (status) {
-            WifiP2pDevice.AVAILABLE -> "Available"
-            WifiP2pDevice.INVITED -> "Invited"
-            WifiP2pDevice.CONNECTED -> "Connected"
-            WifiP2pDevice.FAILED -> "Failed"
-            WifiP2pDevice.UNAVAILABLE -> "Unavailable"
-            else -> "Unknown"
-        }
-    }
-
-    private fun connectToDevice(device: WifiP2pDevice) {
-        updateStatus("Connecting to ${device.deviceName}...")
-        wifiDirect?.connect(device)
-    }
-
     override fun onWifiDirectStateChanged(enabled: Boolean) {
-        runOnUiThread {
+        updateStatus(
             if (enabled) {
-                updateStatus("Wi-Fi Direct is enabled.")
+                "Wi-Fi Direct is enabled."
             } else {
-                updateStatus("Turn on Wi-Fi to use Wi-Fi Direct.")
+                "Turn on Wi-Fi to use Wi-Fi Direct."
             }
-        }
+        )
     }
 
     override fun onPeersAvailable(peers: List<WifiP2pDevice>) {
-        runOnUiThread {
-            discoveredPeers = peers
-            updateStatus(
-                if (peers.isEmpty()) {
-                    "No devices found yet. Search again."
-                } else {
-                    "${peers.size} nearby device(s) found."
-                }
-            )
-        }
+        this.peers = peers
+        updateStatus("${peers.size} nearby device(s) found.")
     }
 
     override fun onConnectionChanged(info: WifiP2pInfo?) {
-        runOnUiThread {
-            connectedInfo = info
+        connectionInfo = info
 
-            if (info?.groupFormed == true) {
-                val ownerAddress =
-                    info.groupOwnerAddress?.hostAddress ?: "Unknown"
+        if (info?.groupFormed == true) {
+            val address = info.groupOwnerAddress?.hostAddress
+                ?: "Unknown"
 
-                updateStatus(
-                    "Wi-Fi Direct connected.\n" +
-                        "Group owner: $ownerAddress"
-                )
+            updateStatus(
+                "Wi-Fi Direct connected.\n" +
+                    "Group owner: $address"
+            )
 
-                showMessage(
-                    "Device connected",
-                    "Wi-Fi Direct connection established.\n\n" +
-                        "Group owner address: $ownerAddress\n\n" +
-                        "File transfer over this connection still needs " +
-                        "to be linked to the transfer server."
-                )
-            } else {
-                updateStatus("Wi-Fi Direct disconnected.")
-            }
+            toast("Wi-Fi Direct connected.")
+        } else {
+            updateStatus("Wi-Fi Direct disconnected.")
         }
     }
 
     override fun onError(message: String) {
-        runOnUiThread {
-            updateStatus(message)
-            Toast.makeText(
-                this,
-                message,
-                Toast.LENGTH_LONG
-            ).show()
-        }
+        updateStatus(message)
+        toast(message)
     }
+
+    // ---------------------------------------------------------
+    // MULTI-FILE PICKER
+    // ---------------------------------------------------------
 
     private fun openFilePicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
 
         try {
-            startActivityForResult(intent, pickFileRequest)
-        } catch (_: Exception) {
+            startActivityForResult(intent, pickerRequest)
+        } catch (e: Exception) {
             toast("Unable to open file picker.")
         }
     }
@@ -337,63 +359,219 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode != pickFileRequest || resultCode != RESULT_OK) {
+        // First check whether the result belongs to QR scanning.
+        val qrResult = IntentIntegrator.parseActivityResult(
+            requestCode,
+            resultCode,
+            data
+        )
+
+        if (qrResult != null) {
+            val contents = qrResult.contents
+
+            if (contents.isNullOrBlank()) {
+                toast("QR scanning cancelled.")
+                return
+            }
+
+            val info = QrCodeHelper.parsePayload(contents)
+
+            if (info == null) {
+                toast("Invalid MAFX SHARE QR code.")
+                return
+            }
+
+            if (pendingFiles.isNotEmpty()) {
+                val files = pendingFiles
+                pendingFiles = emptyList()
+                sendFiles(files, info.ipAddress)
+            } else {
+                askToSelectFiles(info.ipAddress)
+            }
+
             return
         }
 
-        val uri = data?.data ?: return
-
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {
-            // Persistent access may not be supported by every provider.
+        if (requestCode != pickerRequest ||
+            resultCode != RESULT_OK ||
+            data == null
+        ) {
+            return
         }
 
-        askForReceiverIp(uri)
+        val selected = mutableListOf<Uri>()
+
+        data.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) {
+                selected.add(clip.getItemAt(i).uri)
+            }
+        }
+
+        if (selected.isEmpty()) {
+            data.data?.let { selected.add(it) }
+        }
+
+        if (selected.isEmpty()) {
+            toast("No files selected.")
+            return
+        }
+
+        pendingFiles = selected.distinct()
+        askForReceiverIp()
     }
 
-    private fun askForReceiverIp(uri: Uri) {
+    private fun askForReceiverIp() {
         val input = EditText(this).apply {
-            hint = "Example: 192.168.1.10"
+            hint = "Receiver IP address"
             setSingleLine(true)
-            inputType =
-                InputType.TYPE_CLASS_TEXT or
-                    InputType.TYPE_TEXT_VARIATION_URI
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Receiver IP address")
+            .setTitle("Connect to receiver")
             .setMessage(
-                "For the current transfer method, connect both phones " +
-                    "to the same Wi-Fi or hotspot.\n\n" +
-                    "On the receiving phone, tap RECEIVE FILES and " +
-                    "enter the displayed IP address."
+                "${pendingFiles.size} file(s) selected.\n\n" +
+                    "Both phones must be connected to the same " +
+                    "Wi-Fi or hotspot, or have a working Wi-Fi Direct " +
+                    "connection with a reachable receiver address.\n\n" +
+                    "Enter the receiver IP, or scan its connection QR."
             )
             .setView(input)
-            .setNegativeButton("Cancel", null)
+            .setNeutralButton("SCAN QR") { _, _ ->
+                scanConnectionQr()
+            }
+            .setNegativeButton("CANCEL", null)
             .setPositiveButton("SEND", null)
             .create()
             .also { dialog ->
                 dialog.setOnShowListener {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                        .setOnClickListener {
-                            val ip = input.text.toString().trim()
+                    dialog.getButton(
+                        AlertDialog.BUTTON_POSITIVE
+                    ).setOnClickListener {
+                        val ip = input.text.toString().trim()
 
-                            if (ip.isBlank()) {
-                                input.error = "Enter the receiver IP address."
-                                return@setOnClickListener
-                            }
-
-                            dialog.dismiss()
-                            sendFile(uri, ip)
+                        if (!isValidIpv4(ip)) {
+                            input.error = "Enter a valid IPv4 address."
+                            return@setOnClickListener
                         }
+
+                        dialog.dismiss()
+
+                        val files = pendingFiles
+                        pendingFiles = emptyList()
+                        sendFiles(files, ip)
+                    }
                 }
+
                 dialog.show()
             }
     }
+
+    private fun askToSelectFiles(ip: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Receiver connected")
+            .setMessage("Receiver address: $ip\n\nChoose files to send.")
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("SELECT FILES") { _, _ ->
+                openFilePickerForReceiver(ip)
+            }
+            .show()
+    }
+
+    private var qrReceiverIp: String? = null
+
+    private fun openFilePickerForReceiver(ip: String) {
+        qrReceiverIp = ip
+
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+
+        startActivityForResult(intent, pickerRequest)
+    }
+
+    // ---------------------------------------------------------
+    // QR CODE
+    // ---------------------------------------------------------
+
+    private fun scanConnectionQr() {
+        try {
+            IntentIntegrator(this)
+                .setPrompt("Scan the receiver's MAFX SHARE QR code")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false)
+                .setDesiredBarcodeFormats(
+                    IntentIntegrator.QR_CODE
+                )
+                .initiateScan()
+        } catch (e: Exception) {
+            toast("Unable to start QR scanner.")
+        }
+    }
+
+    private fun showConnectionQr(ip: String) {
+        val payload = try {
+            QrCodeHelper.createPayload(ip, port)
+        } catch (e: Exception) {
+            toast("Could not create QR code: ${e.message}")
+            return
+        }
+
+        val bitmap: Bitmap = try {
+            QrCodeHelper.createBitmap(payload)
+        } catch (e: Exception) {
+            toast("Could not generate QR code.")
+            return
+        }
+
+        val page = newPage()
+
+        addText(page, "MAFX SHARE", 28f, green)
+        addText(page, "SCAN TO CONNECT", 19f, blue)
+
+        space(page, 12)
+
+        page.addView(
+            ImageView(this).apply {
+                setImageBitmap(bitmap)
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            },
+            LinearLayout.LayoutParams(
+                dp(280),
+                dp(280)
+            )
+        )
+
+        space(page, 12)
+
+        addText(page, "IP ADDRESS", 14f, Color.DKGRAY)
+        addText(page, ip, 23f, green)
+        addText(page, "Port: $port", 15f, Color.DKGRAY)
+
+        space(page, 12)
+
+        addText(
+            page,
+            "Keep this screen open while the other phone scans the QR code.",
+            14f,
+            Color.DKGRAY
+        )
+
+        space(page, 20)
+
+        addButton(page, "STOP RECEIVING", blue) {
+            stopReceiving()
+            showHome()
+        }
+
+        setContentView(page)
+    }
+
+    // ---------------------------------------------------------
+    // RECEIVE FILES
+    // ---------------------------------------------------------
 
     private fun startReceiving() {
         if (!receiving.compareAndSet(false, true)) {
@@ -401,48 +579,24 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             return
         }
 
-        val ipAddress = getLocalIp()
+        val ip = getLocalIp()
 
-        if (ipAddress == null) {
+        if (ip == null) {
             receiving.set(false)
-            showMessage(
-                "Network unavailable",
-                "No suitable local IPv4 address was found. " +
-                    "Connect to Wi-Fi or a hotspot and try again."
-            )
+
+            AlertDialog.Builder(this)
+                .setTitle("Network unavailable")
+                .setMessage(
+                    "Connect to a Wi-Fi network or hotspot first. " +
+                        "Then try receiving again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+
             return
         }
 
-        val root = createTransferScreen(
-            "RECEIVE FILES",
-            blue,
-            "Starting receiver..."
-        )
-
-        root.addView(
-            TextView(this).apply {
-                text =
-                    "RECEIVER IP ADDRESS\n\n$ipAddress\n\n" +
-                        "Port: $port\n\n" +
-                        "Enter this IP address on the sending phone.\n\n" +
-                        "Keep this screen open while receiving files."
-                textSize = 17f
-                gravity = Gravity.CENTER
-                setTextColor(Color.DKGRAY)
-            },
-            0,
-            matchWidth()
-        )
-
-        addSpace(root, 20)
-
-        root.addView(
-            makeButton("STOP RECEIVING", blue) {
-                stopReceiving()
-                showHome()
-            },
-            matchWidth()
-        )
+        showConnectionQr(ip)
 
         executor.execute {
             var server: ServerSocket? = null
@@ -453,7 +607,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 server.bind(InetSocketAddress(port))
                 serverSocket = server
 
-                updateStatus("Waiting for sender...")
+                updateStatus("Waiting for incoming files...")
 
                 while (receiving.get()) {
                     val client = try {
@@ -463,13 +617,12 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                         break
                     }
 
-                    if (!receiving.get()) {
+                    if (receiving.get()) {
+                        executor.execute {
+                            receiveFile(client)
+                        }
+                    } else {
                         client.close()
-                        break
-                    }
-
-                    executor.execute {
-                        receiveFile(client)
                     }
                 }
             } catch (e: Exception) {
@@ -503,6 +656,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 val input = DataInputStream(
                     BufferedInputStream(connection.getInputStream())
                 )
+
                 val output = DataOutputStream(
                     BufferedOutputStream(connection.getOutputStream())
                 )
@@ -511,7 +665,10 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                     throw IOException("Incompatible MAFX SHARE protocol.")
                 }
 
-                val receivedName = input.readUTF()
+                val name = TransferProtocol.safeFileName(
+                    input.readUTF()
+                )
+
                 val size = input.readLong()
 
                 if (!TransferProtocol.isValidFileSize(size)) {
@@ -521,21 +678,19 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 }
 
                 val directory = getExternalFilesDir("Received")
-                    ?: throw IOException("Destination folder unavailable.")
+                    ?: throw IOException("Received folder unavailable.")
 
                 if (!directory.exists() && !directory.mkdirs()) {
-                    throw IOException("Cannot create destination folder.")
+                    throw IOException("Could not create Received folder.")
                 }
 
-                val fileName = TransferProtocol.uniqueFileName(
-                    receivedName
-                ) { candidate ->
-                    File(directory, candidate).exists() ||
-                        File(directory, "$candidate.part").exists()
+                val uniqueName = TransferProtocol.uniqueFileName(name) {
+                    File(directory, it).exists() ||
+                        File(directory, "$it.part").exists()
                 }
 
-                val destination = File(directory, fileName)
-                val temporary = File(directory, "$fileName.part")
+                val destination = File(directory, uniqueName)
+                val temporary = File(directory, "$uniqueName.part")
 
                 output.writeBoolean(true)
                 output.flush()
@@ -543,7 +698,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 val buffer = ByteArray(TransferProtocol.BUFFER_SIZE)
                 var total = 0L
 
-                FileOutputStream(temporary, false).use { fileOutput ->
+                FileOutputStream(temporary).use { fileOutput ->
                     while (total < size) {
                         val wanted = minOf(
                             buffer.size.toLong(),
@@ -557,6 +712,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                                 "Connection ended before transfer completed."
                             )
                         }
+
                         if (count == 0) continue
 
                         fileOutput.write(buffer, 0, count)
@@ -569,233 +725,195 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
                         updateProgress(
                             percent,
-                            "Receiving $fileName: $percent%"
+                            "Receiving $uniqueName: $percent%"
                         )
                     }
 
                     fileOutput.fd.sync()
                 }
 
-                if (destination.exists() || !temporary.renameTo(destination)) {
-                    throw IOException("Could not finalize received file.")
+                if (!temporary.renameTo(destination)) {
+                    temporary.delete()
+                    throw IOException("Could not save received file.")
                 }
 
                 updateProgress(
                     100,
-                    "Received successfully!\n\n$fileName\n\n" +
-                        "Saved in the app's Received folder."
+                    "Received successfully!\n\n$uniqueName"
                 )
             } catch (e: Exception) {
                 updateStatus(
-                    "Transfer failed: ${e.message ?: "Connection error"}"
+                    "Receive failed: ${e.message ?: "Connection error"}"
                 )
             }
         }
     }
 
-    private fun sendFile(uri: Uri, ip: String) {
-        val fileName = TransferProtocol.safeFileName(getFileName(uri))
-        val size = getFileSize(uri)
+    // ---------------------------------------------------------
+    // SEND MULTIPLE FILES
+    // ---------------------------------------------------------
 
-        if (size < 0L) {
-            toast("Cannot determine the file size. Choose another file.")
+    private fun sendFiles(files: List<Uri>, ip: String) {
+        if (files.isEmpty()) {
+            toast("No files selected.")
             return
         }
 
-        createTransferScreen(
-            "SENDING FILE",
-            green,
-            "Connecting to $ip..."
+        val page = newPage()
+
+        addText(page, "SENDING FILES", 25f, green)
+
+        statusText = addText(
+            page,
+            "Preparing ${files.size} file(s)...",
+            16f,
+            Color.DKGRAY
         )
 
-        val root = layout ?: return
+        space(page, 12)
 
-        addSpace(root, 20)
-
-        root.addView(
-            makeButton("BACK TO HOME", blue) {
-                showHome()
-            },
-            matchWidth()
-        )
-
-        executor.execute {
-            try {
-                Socket().use { socket ->
-                    socket.connect(
-                        InetSocketAddress(ip, port),
-                        TransferProtocol.CONNECT_TIMEOUT_MS
-                    )
-                    socket.tcpNoDelay = true
-                    socket.soTimeout =
-                        TransferProtocol.SOCKET_READ_TIMEOUT_MS
-
-                    val output = DataOutputStream(
-                        BufferedOutputStream(socket.getOutputStream())
-                    )
-                    val input = DataInputStream(
-                        BufferedInputStream(socket.getInputStream())
-                    )
-
-                    TransferProtocol.writeHeader(output)
-                    output.writeUTF(fileName)
-                    output.writeLong(size)
-                    output.flush()
-
-                    if (!input.readBoolean()) {
-                        throw IOException("The receiver rejected this file.")
-                    }
-
-                    val source = contentResolver.openInputStream(uri)
-                        ?: throw IOException("Cannot open selected file.")
-
-                    source.use { stream ->
-                        val buffer =
-                            ByteArray(TransferProtocol.BUFFER_SIZE)
-                        var total = 0L
-
-                        while (total < size) {
-                            val wanted = minOf(
-                                buffer.size.toLong(),
-                                size - total
-                            ).toInt()
-
-                            val count = stream.read(buffer, 0, wanted)
-
-                            if (count < 0) {
-                                throw EOFException(
-                                    "Source file ended before transfer completed."
-                                )
-                            }
-                            if (count == 0) continue
-
-                            output.write(buffer, 0, count)
-                            total += count
-
-                            val percent = TransferProtocol.progressPercent(
-                                total,
-                                size
-                            )
-
-                            updateProgress(
-                                percent,
-                                "Sending $fileName: $percent%"
-                            )
-                        }
-                    }
-
-                    output.flush()
-                    updateProgress(100, "File sent successfully!\n\n$fileName")
-                }
-            } catch (e: Exception) {
-                updateStatus(
-                    "Send failed: ${e.message ?: "Connection error"}\n\n" +
-                        "Check the receiver IP, port, and network."
-                )
-            }
-        }
-    }
-
-    private fun createTransferScreen(
-        title: String,
-        titleColor: Int,
-        initialStatus: String
-    ): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-            setBackgroundColor(Color.WHITE)
-        }
-
-        layout = root
-
-        root.addView(
-            TextView(this).apply {
-                text = title
-                textSize = 25f
-                gravity = Gravity.CENTER
-                setTextColor(titleColor)
-            },
-            matchWidth()
-        )
-
-        addSpace(root, 24)
-
-        status = TextView(this).apply {
-            text = initialStatus
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-        }
-        root.addView(status, matchWidth())
-
-        addSpace(root, 16)
-
-        progress = ProgressBar(
+        progressBar = ProgressBar(
             this,
             null,
             android.R.attr.progressBarStyleHorizontal
         ).apply {
             max = 100
-            this.progress = 0
-        }
-        root.addView(progress, matchWidth())
-
-        setContentView(root)
-        return root
-    }
-
-    private fun getFileName(uri: Uri): String {
-        var name = "shared_file"
-
-        val cursor: Cursor? = contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )
-
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) name = it.getString(index) ?: name
-            }
+            progress = 0
         }
 
-        return name
-    }
+        page.addView(progressBar, matchWidth())
 
-    private fun getFileSize(uri: Uri): Long {
-        val cursor = contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.SIZE),
-            null,
-            null,
-            null
-        )
+        space(page, 20)
 
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.SIZE)
-                if (index >= 0 && !it.isNull(index)) {
-                    return it.getLong(index)
+        addButton(page, "BACK TO HOME", blue) {
+            showHome()
+        }
+
+        setContentView(page)
+
+        executor.execute {
+            var completed = 0
+
+            for (uri in files) {
+                if (isFinishing) break
+
+                try {
+                    sendOneFile(uri, ip)
+                    completed++
+
+                    updateStatus(
+                        "Sent $completed of ${files.size} file(s)."
+                    )
+                } catch (e: Exception) {
+                    updateStatus(
+                        "Failed: ${getFileName(uri)}\n" +
+                            (e.message ?: "Connection error")
+                    )
+                    break
                 }
+
+                updateProgress(
+                    completed * 100 / files.size,
+                    "Sent $completed of ${files.size} file(s)."
+                )
+            }
+
+            if (completed == files.size) {
+                updateProgress(
+                    100,
+                    "All ${files.size} file(s) sent successfully!"
+                )
             }
         }
-
-        return -1L
     }
+
+    private fun sendOneFile(uri: Uri, ip: String) {
+        val name = TransferProtocol.safeFileName(getFileName(uri))
+        val size = getFileSize(uri)
+
+        if (size < 0L) {
+            throw IOException("Could not determine the file size of $name.")
+        }
+
+        Socket().use { socket ->
+            socket.connect(
+                InetSocketAddress(ip, port),
+                TransferProtocol.CONNECT_TIMEOUT_MS
+            )
+
+            socket.tcpNoDelay = true
+            socket.soTimeout = TransferProtocol.SOCKET_READ_TIMEOUT_MS
+
+            val output = DataOutputStream(
+                BufferedOutputStream(socket.getOutputStream())
+            )
+
+            val input = DataInputStream(
+                BufferedInputStream(socket.getInputStream())
+            )
+
+            TransferProtocol.writeHeader(output)
+            output.writeUTF(name)
+            output.writeLong(size)
+            output.flush()
+
+            if (!input.readBoolean()) {
+                throw IOException("Receiver rejected $name.")
+            }
+
+            val source = contentResolver.openInputStream(uri)
+                ?: throw IOException("Cannot open $name.")
+
+            source.use { stream ->
+                val buffer = ByteArray(TransferProtocol.BUFFER_SIZE)
+                var total = 0L
+
+                while (total < size) {
+                    val wanted = minOf(
+                        buffer.size.toLong(),
+                        size - total
+                    ).toInt()
+
+                    val count = stream.read(buffer, 0, wanted)
+
+                    if (count < 0) {
+                        throw EOFException(
+                            "File ended before transfer completed."
+                        )
+                    }
+
+                    if (count == 0) continue
+
+                    output.write(buffer, 0, count)
+                    total += count
+
+                    val percent = TransferProtocol.progressPercent(
+                        total,
+                        size
+                    )
+
+                    updateStatus("Sending $name: $percent%")
+                }
+
+                output.flush()
+            }
+        }
+    }
+
+    // ---------------------------------------------------------
+    // NETWORK AND FILE HELPERS
+    // ---------------------------------------------------------
 
     private fun getLocalIp(): String? {
         return try {
             val interfaces =
                 NetworkInterface.getNetworkInterfaces() ?: return null
-            val addressesFound = mutableListOf<Pair<Int, String>>()
+
+            val candidates = mutableListOf<Pair<Int, String>>()
 
             while (interfaces.hasMoreElements()) {
                 val network = interfaces.nextElement()
+
                 if (!network.isUp || network.isLoopback) continue
 
                 val addresses = network.inetAddresses
@@ -805,27 +923,91 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
                     if (address !is Inet4Address ||
                         address.isLoopbackAddress
-                    ) continue
-
-                    val host = address.hostAddress ?: continue
-                    if (host.startsWith("169.254.")) continue
-
-                    val name = network.name.lowercase()
-                    val priority = when {
-                        name.startsWith("wlan") -> 0
-                        name.startsWith("ap") -> 1
-                        name.startsWith("wifi") -> 2
-                        else -> 3
+                    ) {
+                        continue
                     }
 
-                    addressesFound.add(priority to host)
+                    val host = address.hostAddress ?: continue
+
+                    if (host.startsWith("169.254.")) continue
+
+                    val interfaceName = network.name.lowercase()
+
+                    val priority = when {
+                        interfaceName.startsWith("wlan") -> 0
+                        interfaceName.startsWith("ap") -> 1
+                        interfaceName.startsWith("wifi") -> 2
+                        interfaceName.startsWith("p2p") -> 3
+                        else -> 4
+                    }
+
+                    candidates.add(priority to host)
                 }
             }
 
-            addressesFound.sortedBy { it.first }.firstOrNull()?.second
+            candidates.sortedBy { it.first }.firstOrNull()?.second
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun isValidIpv4(ip: String): Boolean {
+        val parts = ip.split(".")
+
+        if (parts.size != 4) return false
+
+        return parts.all {
+            it.isNotEmpty() &&
+                it.length <= 3 &&
+                it.all { character -> character in '0'..'9' } &&
+                (it.toIntOrNull() ?: -1) in 0..255
+        }
+    }
+
+    private fun getFileName(uri: Uri): String {
+        var name = "shared_file"
+
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(
+                    OpenableColumns.DISPLAY_NAME
+                )
+
+                if (index >= 0) {
+                    name = cursor.getString(index) ?: name
+                }
+            }
+        }
+
+        return name
+    }
+
+    private fun getFileSize(uri: Uri): Long {
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(
+                    OpenableColumns.SIZE
+                )
+
+                if (index >= 0 && !cursor.isNull(index)) {
+                    return cursor.getLong(index)
+                }
+            }
+        }
+
+        return -1L
     }
 
     private fun stopReceiving() {
@@ -837,59 +1019,6 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
         }
 
         serverSocket = null
-    }
-
-    private fun updateStatus(message: String) {
-        runOnUiThread {
-            status?.text = message
-        }
-    }
-
-    private fun updateProgress(percent: Int, message: String) {
-        runOnUiThread {
-            progress?.progress = percent.coerceIn(0, 100)
-            status?.text = message
-        }
-    }
-
-    private fun makeButton(
-        label: String,
-        color: Int,
-        action: () -> Unit
-    ): Button {
-        return Button(this).apply {
-            text = label
-            setTextColor(Color.WHITE)
-            setBackgroundColor(color)
-            setOnClickListener { action() }
-        }
-    }
-
-    private fun matchWidth() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT
-    )
-
-    private fun addSpace(parent: LinearLayout, height: Int) {
-        parent.addView(
-            View(this),
-            LinearLayout.LayoutParams(1, dp(height))
-        )
-    }
-
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
-
-    private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    }
-
-    private fun showMessage(title: String, message: String) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show()
     }
 
     override fun onDestroy() {
