@@ -4,28 +4,43 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.IOException
+import java.util.Locale
 
 /**
  * MAFX SHARE transfer protocol.
  *
  * Android API 26+
  *
- * Supports large files without loading the entire file into memory.
+ * Designed for large-file transfers with bounded memory usage.
+ * Sender and receiver must use the same protocol settings.
  */
 internal object TransferProtocol {
 
     const val PORT = 45872
 
     const val CONNECT_TIMEOUT_MS = 10_000
+
     const val SOCKET_READ_TIMEOUT_MS = 60_000
 
-    /*
-     * A 256 KiB transfer buffer reduces the number of read/write
-     * operations while keeping memory usage manageable.
+    /**
+     * 1 MiB buffer.
      *
-     * This is a tuning choice, not a guarantee of higher speed.
+     * This reduces the number of read/write operations compared
+     * with the previous 256 KiB buffer while keeping memory usage
+     * reasonable for phones with limited RAM.
      */
-    const val BUFFER_SIZE = 256 * 1024
+    const val BUFFER_SIZE = 1024 * 1024
+
+    /**
+     * Minimum interval between progress UI updates.
+     * Transfer code can use this to avoid excessive UI work.
+     */
+    const val PROGRESS_UPDATE_INTERVAL_MS = 150L
+
+    /**
+     * Minimum byte difference before a progress update.
+     */
+    const val PROGRESS_UPDATE_BYTES = 1024L * 1024L
 
     const val MAX_FILE_NAME_LENGTH = 180
 
@@ -47,9 +62,7 @@ internal object TransferProtocol {
      * Verify that the connected device speaks the expected protocol.
      */
     @Throws(IOException::class)
-    fun readAndValidateHeader(
-        input: DataInputStream
-    ): Boolean {
+    fun readAndValidateHeader(input: DataInputStream): Boolean {
         val magic = input.readInt()
         val version = input.readInt()
 
@@ -95,7 +108,6 @@ internal object TransferProtocol {
 
     /**
      * Reject invalid negative file sizes.
-     *
      * Zero-byte files are allowed.
      */
     fun isValidFileSize(size: Long): Boolean {
@@ -136,13 +148,13 @@ internal object TransferProtocol {
 
         return if (megabytesPerSecond >= 100.0) {
             String.format(
-                java.util.Locale.US,
+                Locale.US,
                 "%.0f MB/s",
                 megabytesPerSecond
             )
         } else {
             String.format(
-                java.util.Locale.US,
+                Locale.US,
                 "%.1f MB/s",
                 megabytesPerSecond
             )
