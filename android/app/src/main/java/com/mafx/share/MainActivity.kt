@@ -11,6 +11,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,7 +44,8 @@ class MainActivity : AppCompatActivity() {
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(pageBackground)
+            setBackgroundColor(white)
+            clipToPadding = false
         }
 
         content = LinearLayout(this).apply {
@@ -75,6 +78,26 @@ class MainActivity : AppCompatActivity() {
         )
 
         setContentView(root)
+
+        // Android system bar spacing fix
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout()
+            )
+
+            view.setPadding(
+                bars.left,
+                bars.top,
+                bars.right,
+                bars.bottom
+            )
+
+            insets
+        }
+
+        ViewCompat.requestApplyInsets(root)
+
         showPage("Home")
     }
 
@@ -239,7 +262,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, dp(16))
         }
 
-        // Use addView(page) to avoid the ScrollView.LayoutParams error.
         scroll.addView(page)
 
         content.addView(
@@ -465,7 +487,6 @@ class MainActivity : AppCompatActivity() {
 
             addView(
                 label(subtitle, 11f, white).apply {
-                    gravity = Gravity.CENTER
                     gravity = Gravity.CENTER
                     textAlignment = View.TEXT_ALIGNMENT_CENTER
                 }
@@ -1056,8 +1077,18 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // Improved bottom navigation
     private fun buildBottomBar() {
         bottomBar.removeAllViews()
+
+        bottomBar.setPadding(
+            dp(6),
+            dp(5),
+            dp(6),
+            dp(5)
+        )
+
+        bottomBar.elevation = dp(12).toFloat()
 
         val items = listOf(
             Triple("⌂", "Home", "Home"),
@@ -1072,38 +1103,88 @@ class MainActivity : AppCompatActivity() {
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(0, dp(5), 0, dp(3))
+
+                setPadding(
+                    dp(2),
+                    dp(5),
+                    dp(2),
+                    dp(5)
+                )
+
+                background = if (selected) {
+                    rounded(
+                        Color.rgb(226, 248, 237),
+                        16
+                    )
+                } else {
+                    rounded(white, 16)
+                }
+
+                isClickable = true
+                isFocusable = true
+                contentDescription = title
 
                 setOnClickListener {
-                    showPage(destination)
+                    if (currentPage != destination) {
+                        showPage(destination)
+                    }
                 }
             }
 
             item.addView(
                 label(
                     icon,
-                    23f,
-                    if (selected) green else muted,
+                    25f,
+                    if (selected) {
+                        Color.rgb(0, 125, 67)
+                    } else {
+                        Color.rgb(55, 69, 86)
+                    },
                     true
                 ).apply {
                     gravity = Gravity.CENTER
-                }
+                    includeFontPadding = false
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(30)
+                )
             )
 
             item.addView(
                 label(
                     title,
-                    10f,
-                    if (selected) green else muted,
+                    11f,
+                    if (selected) {
+                        Color.rgb(0, 125, 67)
+                    } else {
+                        Color.rgb(55, 69, 86)
+                    },
                     selected
                 ).apply {
                     gravity = Gravity.CENTER
-                }
+                    includeFontPadding = false
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(20)
+                )
             )
 
             bottomBar.addView(
                 item,
-                LinearLayout.LayoutParams(0, dp(62), 1f)
+                LinearLayout.LayoutParams(
+                    0,
+                    dp(56),
+                    1f
+                ).apply {
+                    setMargins(
+                        dp(3),
+                        0,
+                        dp(3),
+                        0
+                    )
+                }
             )
         }
     }
