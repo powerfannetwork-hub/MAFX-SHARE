@@ -1,8 +1,12 @@
 package com.mafx.share
 
+import android.Manifest
+import android.app.AlertDialog
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -10,7 +14,10 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -29,6 +36,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bottomBar: LinearLayout
 
     private var currentPage = "Home"
+    private var hotspotController: HotspotController? = null
+
+    private val hotspotPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { results ->
+            if (results.values.all { it }) {
+                startMAFXHotspot()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Please allow the required Wi-Fi permission.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,10 +60,8 @@ class MainActivity : AppCompatActivity() {
         window.navigationBarColor = white
 
         @Suppress("DEPRECATION")
-        run {
-            window.decorView.systemUiVisibility =
-                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        }
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -79,7 +100,6 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(root)
 
-        // Android system bar spacing fix
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or
@@ -97,7 +117,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         ViewCompat.requestApplyInsets(root)
-
         showPage("Home")
     }
 
@@ -148,7 +167,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             isAllCaps = false
             setTextColor(white)
-            setBackground(rounded(color, 16))
+            background = rounded(color, 16)
             setPadding(dp(12), dp(8), dp(12), dp(8))
 
             setOnClickListener {
@@ -163,15 +182,13 @@ class MainActivity : AppCompatActivity() {
     ): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-
             setPadding(
                 dp(padding),
                 dp(padding),
                 dp(padding),
                 dp(padding)
             )
-
-            setBackground(rounded(white, 20))
+            background = rounded(white, 20)
             elevation = dp(2).toFloat()
         }
 
@@ -192,10 +209,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         parent.addView(
             View(this),
-            LinearLayout.LayoutParams(
-                1,
-                dp(height)
-            )
+            LinearLayout.LayoutParams(1, dp(height))
         )
     }
 
@@ -241,10 +255,8 @@ class MainActivity : AppCompatActivity() {
             "Transfers" -> transfersPage()
             "History" -> historyPage()
             "Settings" -> settingsPage()
-
             "Photos", "Videos", "Music", "Apps", "Files" ->
                 categoryPage(page)
-
             else -> homePage()
         }
 
@@ -282,24 +294,16 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(20), dp(28), dp(20), dp(28))
-
-            setBackground(
-                GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(
-                        navy,
-                        Color.rgb(0, 81, 145),
-                        blue
-                    )
-                ).apply {
-                    cornerRadii = floatArrayOf(
-                        0f, 0f,
-                        0f, 0f,
-                        dp(25).toFloat(), dp(25).toFloat(),
-                        dp(25).toFloat(), dp(25).toFloat()
-                    )
-                }
-            )
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(navy, Color.rgb(0, 81, 145), blue)
+            ).apply {
+                cornerRadii = floatArrayOf(
+                    0f, 0f, 0f, 0f,
+                    dp(25).toFloat(), dp(25).toFloat(),
+                    dp(25).toFloat(), dp(25).toFloat()
+                )
+            }
         }
 
         banner.addView(
@@ -400,7 +404,7 @@ class MainActivity : AppCompatActivity() {
                     textSize = 25f
                     setTextColor(white)
                     gravity = Gravity.CENTER
-                    setBackground(rounded(color, 14))
+                    background = rounded(color, 14)
                 }
 
                 item.addView(
@@ -432,25 +436,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         val status = card(page)
-
-        status.addView(
-            label("DEVICE STATUS", 12f, muted, true)
-        )
-
+        status.addView(label("DEVICE STATUS", 12f, muted, true))
         space(status, 8)
-
         status.addView(
             label("●  MAFX SHARE is ready", 15f, green, true)
         )
-
         space(status, 4)
-
         status.addView(
-            label(
-                "Connect two devices to begin sharing.",
-                13f,
-                muted
-            )
+            label("Connect two devices to begin sharing.", 13f, muted)
         )
     }
 
@@ -465,11 +458,9 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(10), dp(8), dp(10))
-            setBackground(rounded(color, 22))
+            background = rounded(color, 22)
 
-            setOnClickListener {
-                click()
-            }
+            setOnClickListener { click() }
 
             addView(
                 label(icon, 34f, white, true).apply {
@@ -509,7 +500,6 @@ class MainActivity : AppCompatActivity() {
 
         for ((icon, name) in categories) {
             val box = card(page, 14)
-
             box.orientation = LinearLayout.HORIZONTAL
             box.gravity = Gravity.CENTER_VERTICAL
 
@@ -530,20 +520,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        space(page, 12)
-
         val info = card(page)
-
-        info.addView(
-            label("Selected files", 17f, textColor, true)
-        )
-
+        info.addView(label("Selected files", 17f, textColor, true))
         space(info, 6)
-
-        info.addView(
-            label("No files selected", 13f, muted)
-        )
-
+        info.addView(label("Choose a category to continue.", 13f, muted))
         space(info, 12)
 
         info.addView(
@@ -560,11 +540,7 @@ class MainActivity : AppCompatActivity() {
     private fun categoryPage(category: String) {
         val page = scrollPage()
 
-        heading(
-            page,
-            category,
-            "Select files to prepare for sharing"
-        )
+        heading(page, category, "Select files to prepare for sharing")
 
         val box = card(page)
         box.gravity = Gravity.CENTER
@@ -587,7 +563,7 @@ class MainActivity : AppCompatActivity() {
 
         box.addView(
             label(
-                "File selection will be connected to the Android file picker.",
+                "The file picker and transfer engine must be connected to select and send real files.",
                 13f,
                 muted
             ).apply {
@@ -612,11 +588,7 @@ class MainActivity : AppCompatActivity() {
     private fun receivePage() {
         val page = scrollPage()
 
-        heading(
-            page,
-            "Receiving Files",
-            "Get ready to receive files"
-        )
+        heading(page, "Receiving Files", "Get ready to receive files")
 
         val box = card(page)
         box.gravity = Gravity.CENTER
@@ -641,7 +613,7 @@ class MainActivity : AppCompatActivity() {
 
         box.addView(
             label(
-                "Connect to the sender using the same Wi-Fi network or the supported connection method.",
+                "Start the connection method on both devices. Starting a hotspot alone does not start file receiving.",
                 13f,
                 muted
             ).apply {
@@ -662,19 +634,10 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
-        space(page, 10)
-
         val note = card(page)
-
-        note.addView(
-            label("Connection status", 15f, textColor, true)
-        )
-
+        note.addView(label("Connection status", 15f, textColor, true))
         space(note, 8)
-
-        note.addView(
-            label("Not connected", 14f, muted)
-        )
+        note.addView(label("Not connected", 14f, muted))
     }
 
     private fun connectPage() {
@@ -690,7 +653,7 @@ class MainActivity : AppCompatActivity() {
 
         hero.gravity = Gravity.CENTER
         hero.setPadding(dp(20), dp(28), dp(20), dp(28))
-        hero.setBackground(rounded(navy, 24))
+        hero.background = rounded(navy, 24)
 
         hero.addView(
             label("◎", 70f, Color.rgb(0, 220, 190), true).apply {
@@ -709,14 +672,65 @@ class MainActivity : AppCompatActivity() {
         space(hero, 8)
 
         hero.addView(
-            label("Select a method to continue.", 13f, white).apply {
+            label(
+                "Create a temporary Wi-Fi hotspot or explore other connection options.",
+                13f,
+                white
+            ).apply {
                 gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
             }
         )
 
+        // Hotspot controls
+        val hotspotCard = card(page)
+
+        hotspotCard.addView(
+            label("Wi-Fi Hotspot", 18f, textColor, true)
+        )
+
+        space(hotspotCard, 6)
+
+        hotspotCard.addView(
+            label(
+                "Create a local Wi-Fi network for the other device to join.",
+                13f,
+                muted
+            )
+        )
+
+        space(hotspotCard, 14)
+
+        hotspotCard.addView(
+            button("START HOTSPOT", green) {
+                requestHotspotPermission()
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+            )
+        )
+
+        space(hotspotCard, 8)
+
+        hotspotCard.addView(
+            button("STOP HOTSPOT", navy) {
+                hotspotController?.stopHotspot()
+                Toast.makeText(
+                    this,
+                    "Hotspot stop requested",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+        )
+
+        // Other connection methods
         val methods = listOf(
-            Triple("◉", "Wi-Fi Direct", "Direct device connection"),
-            Triple("◉", "Hotspot", "Connect through a personal hotspot"),
+            Triple("◉", "Wi-Fi Direct", "Find nearby devices"),
             Triple("▦", "Scan QR Code", "Scan a compatible connection QR")
         )
 
@@ -735,35 +749,28 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
             }
 
-            texts.addView(
-                label(title, 15f, textColor, true)
-            )
-
-            texts.addView(
-                label(subtitle, 11f, muted)
-            )
+            texts.addView(label(title, 15f, textColor, true))
+            texts.addView(label(subtitle, 11f, muted))
 
             box.addView(
                 texts,
                 LinearLayout.LayoutParams(0, dp(48), 1f)
             )
 
-            box.addView(
-                label("›", 25f, muted)
-            )
+            box.addView(label("›", 25f, muted))
 
             box.setOnClickListener {
                 when (title) {
-                    "Wi-Fi Direct", "Hotspot" ->
-                        showPage("Nearby Devices")
+                    "Wi-Fi Direct" -> showPage("Nearby Devices")
 
-                    "Scan QR Code" ->
-                        showPage("Receive")
+                    "Scan QR Code" -> Toast.makeText(
+                        this,
+                        "QR scanner is not connected yet.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
-
-        space(page, 12)
 
         page.addView(
             button("SEARCH NEARBY DEVICES", blue) {
@@ -776,6 +783,78 @@ class MainActivity : AppCompatActivity() {
                 setMargins(dp(16), dp(8), dp(16), dp(8))
             }
         )
+    }
+
+    private fun requestHotspotPermission() {
+        val permissions = when {
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            )
+
+            else -> arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        }
+
+        val missing = permissions.filter {
+            ContextCompat.checkSelfPermission(
+                this,
+                it
+            ) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isEmpty()) {
+            startMAFXHotspot()
+        } else {
+            hotspotPermissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun startMAFXHotspot() {
+        if (hotspotController == null) {
+            hotspotController = HotspotController(this)
+        }
+
+        val controller = hotspotController ?: return
+
+        controller.onHotspotReady = { ssid, password ->
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle("MAFX SHARE Hotspot Ready")
+                    .setMessage(
+                        "Wi-Fi name: $ssid\n\n" +
+                            "Password: $password\n\n" +
+                            "Connect the other device to this Wi-Fi network."
+                    )
+                    .setPositiveButton("OK", null)
+                    .setNegativeButton("STOP HOTSPOT") { _, _ ->
+                        controller.stopHotspot()
+                    }
+                    .show()
+            }
+        }
+
+        controller.onError = { message ->
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    message,
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
+        controller.onHotspotStopped = {
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    "Hotspot stopped",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        controller.startHotspot()
     }
 
     private fun nearbyPage() {
@@ -797,7 +876,7 @@ class MainActivity : AppCompatActivity() {
 
         info.addView(
             label(
-                "Real device discovery will be connected in the networking stage.",
+                "Nearby device discovery is not yet connected to the Wi-Fi Direct manager.",
                 13f,
                 muted
             )
@@ -819,31 +898,25 @@ class MainActivity : AppCompatActivity() {
 
         deviceInfo.addView(
             label(
-                android.os.Build.MODEL ?: "Android Device",
+                Build.MODEL ?: "Android Device",
                 15f,
                 textColor,
                 true
             )
         )
 
-        deviceInfo.addView(
-            label("This device", 12f, green)
-        )
+        deviceInfo.addView(label("This device", 12f, green))
 
         localDevice.addView(
             deviceInfo,
             LinearLayout.LayoutParams(0, dp(55), 1f)
         )
 
-        localDevice.addView(
-            label("✓", 22f, green, true)
-        )
-
-        space(page, 10)
+        localDevice.addView(label("✓", 22f, green, true))
 
         page.addView(
-            button("SCAN AGAIN", blue) {
-                showPage("Nearby Devices")
+            button("BACK TO CONNECTION OPTIONS", blue) {
+                showPage("Connect")
             },
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -852,35 +925,14 @@ class MainActivity : AppCompatActivity() {
                 setMargins(dp(16), dp(8), dp(16), dp(8))
             }
         )
-
-        val warning = card(page)
-
-        warning.addView(
-            label("Connection", 16f, textColor, true)
-        )
-
-        space(warning, 6)
-
-        warning.addView(
-            label(
-                "No remote device is confirmed connected yet.",
-                13f,
-                muted
-            )
-        )
     }
 
     private fun transfersPage() {
         val page = scrollPage()
 
-        heading(
-            page,
-            "Transfers",
-            "Monitor your file transfers"
-        )
+        heading(page, "Transfers", "Monitor your file transfers")
 
         val tabs = card(page)
-
         tabs.orientation = LinearLayout.HORIZONTAL
 
         tabs.addView(
@@ -894,7 +946,6 @@ class MainActivity : AppCompatActivity() {
         )
 
         val empty = card(page)
-
         empty.gravity = Gravity.CENTER
 
         space(empty, 25)
@@ -917,11 +968,12 @@ class MainActivity : AppCompatActivity() {
 
         empty.addView(
             label(
-                "Your transfer progress will appear here.",
+                "Your transfer progress will appear here when the transfer engine is connected.",
                 13f,
                 muted
             ).apply {
                 gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
             }
         )
 
@@ -950,7 +1002,6 @@ class MainActivity : AppCompatActivity() {
         )
 
         val box = card(page)
-
         box.gravity = Gravity.CENTER
 
         space(box, 24)
@@ -973,11 +1024,12 @@ class MainActivity : AppCompatActivity() {
 
         box.addView(
             label(
-                "Completed transfers will appear here.",
+                "Completed transfers will appear here when history tracking is connected.",
                 13f,
                 muted
             ).apply {
                 gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
             }
         )
 
@@ -987,11 +1039,7 @@ class MainActivity : AppCompatActivity() {
     private fun settingsPage() {
         val page = scrollPage()
 
-        heading(
-            page,
-            "Settings",
-            "Customize your experience"
-        )
+        heading(page, "Settings", "Customize your experience")
 
         val device = card(page)
 
@@ -1012,11 +1060,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         deviceText.addView(
-            label(
-                android.os.Build.MODEL ?: "Android Device",
-                12f,
-                muted
-            )
+            label(Build.MODEL ?: "Android Device", 12f, muted)
         )
 
         device.addView(deviceText)
@@ -1059,35 +1103,28 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        texts.addView(
-            label(title, 14f, textColor, true)
-        )
-
-        texts.addView(
-            label(subtitle, 12f, muted)
-        )
+        texts.addView(label(title, 14f, textColor, true))
+        texts.addView(label(subtitle, 12f, muted))
 
         box.addView(
             texts,
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
 
-        box.addView(
-            label("›", 24f, muted)
-        )
+        box.addView(label("›", 24f, muted))
+
+        box.setOnClickListener {
+            when (title) {
+                "Hotspot" -> showPage("Connect")
+                "Wi-Fi Direct" -> showPage("Nearby Devices")
+            }
+        }
     }
 
-    // Improved bottom navigation
     private fun buildBottomBar() {
         bottomBar.removeAllViews()
 
-        bottomBar.setPadding(
-            dp(6),
-            dp(5),
-            dp(6),
-            dp(5)
-        )
-
+        bottomBar.setPadding(dp(6), dp(5), dp(6), dp(5))
         bottomBar.elevation = dp(12).toFloat()
 
         val items = listOf(
@@ -1103,19 +1140,10 @@ class MainActivity : AppCompatActivity() {
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-
-                setPadding(
-                    dp(2),
-                    dp(5),
-                    dp(2),
-                    dp(5)
-                )
+                setPadding(dp(2), dp(5), dp(2), dp(5))
 
                 background = if (selected) {
-                    rounded(
-                        Color.rgb(226, 248, 237),
-                        16
-                    )
+                    rounded(Color.rgb(226, 248, 237), 16)
                 } else {
                     rounded(white, 16)
                 }
@@ -1135,11 +1163,8 @@ class MainActivity : AppCompatActivity() {
                 label(
                     icon,
                     25f,
-                    if (selected) {
-                        Color.rgb(0, 125, 67)
-                    } else {
-                        Color.rgb(55, 69, 86)
-                    },
+                    if (selected) Color.rgb(0, 125, 67)
+                    else Color.rgb(55, 69, 86),
                     true
                 ).apply {
                     gravity = Gravity.CENTER
@@ -1155,11 +1180,8 @@ class MainActivity : AppCompatActivity() {
                 label(
                     title,
                     11f,
-                    if (selected) {
-                        Color.rgb(0, 125, 67)
-                    } else {
-                        Color.rgb(55, 69, 86)
-                    },
+                    if (selected) Color.rgb(0, 125, 67)
+                    else Color.rgb(55, 69, 86),
                     selected
                 ).apply {
                     gravity = Gravity.CENTER
@@ -1173,20 +1195,17 @@ class MainActivity : AppCompatActivity() {
 
             bottomBar.addView(
                 item,
-                LinearLayout.LayoutParams(
-                    0,
-                    dp(56),
-                    1f
-                ).apply {
-                    setMargins(
-                        dp(3),
-                        0,
-                        dp(3),
-                        0
-                    )
+                LinearLayout.LayoutParams(0, dp(56), 1f).apply {
+                    setMargins(dp(3), 0, dp(3), 0)
                 }
             )
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Keep the hotspot running unless the user explicitly stops it.
+        // This avoids unexpectedly disconnecting a connected device.
     }
 
     @Deprecated("Deprecated in Android")
