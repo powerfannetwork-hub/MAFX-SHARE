@@ -7,49 +7,35 @@ import java.io.IOException
 import java.util.Locale
 
 /**
- * MAFX SHARE transfer protocol.
+ * MAFX SHARE transfer protocol helpers.
  *
- * Android API 26+
+ * Keep the default port aligned with TransferClient and TransferServer.
+ * The current Client/Server wire format is:
+ * UTF filename, Long file size, then exactly file-size raw bytes.
  *
- * Designed for large-file transfers with bounded memory usage.
- * Sender and receiver must use the same protocol settings.
+ * Header helpers remain available for any code that explicitly uses them;
+ * do not add header calls to only one side of the current Client/Server pair.
  */
 internal object TransferProtocol {
 
-    const val PORT = 45872
+    const val PORT = 8988
 
     const val CONNECT_TIMEOUT_MS = 10_000
-
     const val SOCKET_READ_TIMEOUT_MS = 60_000
 
-    /**
-     * 1 MiB buffer.
-     *
-     * This reduces the number of read/write operations compared
-     * with the previous 256 KiB buffer while keeping memory usage
-     * reasonable for phones with limited RAM.
-     */
     const val BUFFER_SIZE = 1024 * 1024
 
-    /**
-     * Minimum interval between progress UI updates.
-     * Transfer code can use this to avoid excessive UI work.
-     */
     const val PROGRESS_UPDATE_INTERVAL_MS = 150L
-
-    /**
-     * Minimum byte difference before a progress update.
-     */
     const val PROGRESS_UPDATE_BYTES = 1024L * 1024L
 
     const val MAX_FILE_NAME_LENGTH = 180
-
     const val PROTOCOL_VERSION = 1
 
     private const val MAGIC_NUMBER = 0x4D414658 // MAFX
 
     /**
-     * Write the protocol header.
+     * Write a versioned protocol header.
+     * Only use this when both sender and receiver expect the header.
      */
     @Throws(IOException::class)
     fun writeHeader(output: DataOutputStream) {
@@ -59,15 +45,14 @@ internal object TransferProtocol {
     }
 
     /**
-     * Verify that the connected device speaks the expected protocol.
+     * Verify a versioned protocol header.
+     * Only use this when both sender and receiver expect the header.
      */
     @Throws(IOException::class)
     fun readAndValidateHeader(input: DataInputStream): Boolean {
         val magic = input.readInt()
         val version = input.readInt()
-
-        return magic == MAGIC_NUMBER &&
-            version == PROTOCOL_VERSION
+        return magic == MAGIC_NUMBER && version == PROTOCOL_VERSION
     }
 
     /**
@@ -84,35 +69,22 @@ internal object TransferProtocol {
         }
 
         var offset = 0
-
         while (offset < length) {
-            val count = input.read(
-                buffer,
-                offset,
-                length - offset
-            )
-
+            val count = input.read(buffer, offset, length - offset)
             if (count < 0) {
                 throw EOFException(
                     "Connection closed before transfer completed."
                 )
             }
-
-            if (count == 0) {
-                continue
-            }
-
+            if (count == 0) continue
             offset += count
         }
     }
 
     /**
-     * Reject invalid negative file sizes.
-     * Zero-byte files are allowed.
+     * Zero-byte files are allowed; negative sizes are rejected.
      */
-    fun isValidFileSize(size: Long): Boolean {
-        return size >= 0L
-    }
+    fun isValidFileSize(size: Long): Boolean = size >= 0L
 
     /**
      * Calculate progress without overflowing a Long multiplication.
@@ -121,18 +93,15 @@ internal object TransferProtocol {
         transferredBytes: Long,
         totalBytes: Long
     ): Int {
-        if (totalBytes <= 0L) {
-            return 100
-        }
+        if (totalBytes <= 0L) return 100
 
         val safeTransferred = transferredBytes
             .coerceAtLeast(0L)
             .coerceAtMost(totalBytes)
 
         return (
-            safeTransferred.toDouble() /
-                totalBytes.toDouble() * 100.0
-            ).toInt().coerceIn(0, 100)
+            safeTransferred.toDouble() / totalBytes.toDouble() * 100.0
+        ).toInt().coerceIn(0, 100)
     }
 
     /**
@@ -143,29 +112,16 @@ internal object TransferProtocol {
             return "0 MB/s"
         }
 
-        val megabytesPerSecond =
-            bytesPerSecond / (1024.0 * 1024.0)
-
+        val megabytesPerSecond = bytesPerSecond / (1024.0 * 1024.0)
         return if (megabytesPerSecond >= 100.0) {
-            String.format(
-                Locale.US,
-                "%.0f MB/s",
-                megabytesPerSecond
-            )
+            String.format(Locale.US, "%.0f MB/s", megabytesPerSecond)
         } else {
-            String.format(
-                Locale.US,
-                "%.1f MB/s",
-                megabytesPerSecond
-            )
+            String.format(Locale.US, "%.1f MB/s", megabytesPerSecond)
         }
     }
 
     /**
-     * Sanitize an incoming filename.
-     *
-     * Directory traversal is removed and invalid characters are
-     * replaced. The returned name is not a filesystem path.
+     * Sanitize an incoming filename. The returned value is not a path.
      */
     fun safeFileName(rawName: String?): String {
         val leafName = rawName
@@ -173,10 +129,7 @@ internal object TransferProtocol {
             ?.substringAfterLast('/')
             .orEmpty()
 
-        val invalidCharacters = charArrayOf(
-            '<', '>', ':', '"', '|', '?', '*'
-        )
-
+        val invalidCharacters = charArrayOf('<', '>', ':', '"', '|', '?', '*')
         val cleanedName = buildString {
             for (character in leafName) {
                 when {
@@ -200,17 +153,14 @@ internal object TransferProtocol {
     }
 
     /**
-     * Generate a unique filename without overwriting existing files.
+     * Generate a unique filename without overwriting an existing file.
      */
     fun uniqueFileName(
         originalName: String,
         fileExists: (String) -> Boolean
     ): String {
         val safeName = safeFileName(originalName)
-
-        if (!fileExists(safeName)) {
-            return safeName
-        }
+        if (!fileExists(safeName)) return safeName
 
         val dotIndex = safeName.lastIndexOf('.')
         val hasExtension = dotIndex > 0
@@ -228,19 +178,12 @@ internal object TransferProtocol {
         }
 
         var counter = 1
-
         while (counter < Int.MAX_VALUE) {
             val candidate = "$baseName ($counter)$extension"
-
-            if (!fileExists(candidate)) {
-                return candidate
-            }
-
+            if (!fileExists(candidate)) return candidate
             counter++
         }
 
-        throw IOException(
-            "Unable to generate a unique filename."
-        )
+        throw IOException("Unable to generate a unique filename.")
     }
 }
