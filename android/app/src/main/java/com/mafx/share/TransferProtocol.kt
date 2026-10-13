@@ -6,29 +6,35 @@ import java.io.EOFException
 import java.io.IOException
 
 /**
- * MAFX SHARE — Transfer Protocol
+ * MAFX SHARE transfer protocol.
  *
- * Central configuration and protocol helpers for file transfers.
+ * Android API 26+
  *
- * This file is designed for Android API 26+ and Kotlin/JVM.
+ * Supports large files without loading the entire file into memory.
  */
 internal object TransferProtocol {
 
-    // Network configuration
     const val PORT = 45872
-    const val CONNECT_TIMEOUT_MS = 10_000
-    const val SOCKET_READ_TIMEOUT_MS = 30_000
 
-    // Transfer configuration
-    const val BUFFER_SIZE = 64 * 1024
+    const val CONNECT_TIMEOUT_MS = 10_000
+    const val SOCKET_READ_TIMEOUT_MS = 60_000
+
+    /*
+     * A 256 KiB transfer buffer reduces the number of read/write
+     * operations while keeping memory usage manageable.
+     *
+     * This is a tuning choice, not a guarantee of higher speed.
+     */
+    const val BUFFER_SIZE = 256 * 1024
+
     const val MAX_FILE_NAME_LENGTH = 180
 
-    // Protocol identification
     const val PROTOCOL_VERSION = 1
-    private const val MAGIC_NUMBER = 0x4D414658 // "MAFX"
+
+    private const val MAGIC_NUMBER = 0x4D414658 // MAFX
 
     /**
-     * Write the protocol header before transfer metadata.
+     * Write the protocol header.
      */
     @Throws(IOException::class)
     fun writeHeader(output: DataOutputStream) {
@@ -38,12 +44,12 @@ internal object TransferProtocol {
     }
 
     /**
-     * Validate the protocol header received from another device.
-     *
-     * Returns false when the peer uses an incompatible protocol.
+     * Verify that the connected device speaks the expected protocol.
      */
     @Throws(IOException::class)
-    fun readAndValidateHeader(input: DataInputStream): Boolean {
+    fun readAndValidateHeader(
+        input: DataInputStream
+    ): Boolean {
         val magic = input.readInt()
         val version = input.readInt()
 
@@ -52,9 +58,7 @@ internal object TransferProtocol {
     }
 
     /**
-     * Read an exact number of bytes.
-     *
-     * Throws EOFException if the connection ends prematurely.
+     * Read exactly the requested number of bytes.
      */
     @Throws(IOException::class)
     fun readFully(
@@ -90,17 +94,16 @@ internal object TransferProtocol {
     }
 
     /**
-     * Validate a file size received from another device.
+     * Reject invalid negative file sizes.
      *
-     * Zero-byte files are valid.
-     * Negative sizes are invalid.
+     * Zero-byte files are allowed.
      */
     fun isValidFileSize(size: Long): Boolean {
         return size >= 0L
     }
 
     /**
-     * Calculate transfer progress safely.
+     * Calculate progress without overflowing a Long multiplication.
      */
     fun progressPercent(
         transferredBytes: Long,
@@ -121,9 +124,36 @@ internal object TransferProtocol {
     }
 
     /**
-     * Convert an incoming filename into a safe local filename.
+     * Format transfer speed for the user interface.
+     */
+    fun formatSpeed(bytesPerSecond: Double): String {
+        if (!bytesPerSecond.isFinite() || bytesPerSecond <= 0.0) {
+            return "0 MB/s"
+        }
+
+        val megabytesPerSecond =
+            bytesPerSecond / (1024.0 * 1024.0)
+
+        return if (megabytesPerSecond >= 100.0) {
+            String.format(
+                java.util.Locale.US,
+                "%.0f MB/s",
+                megabytesPerSecond
+            )
+        } else {
+            String.format(
+                java.util.Locale.US,
+                "%.1f MB/s",
+                megabytesPerSecond
+            )
+        }
+    }
+
+    /**
+     * Sanitize an incoming filename.
      *
-     * Prevents directory traversal and removes control characters.
+     * Directory traversal is removed and invalid characters are
+     * replaced. The returned name is not a filesystem path.
      */
     fun safeFileName(rawName: String?): String {
         val leafName = rawName
@@ -131,19 +161,20 @@ internal object TransferProtocol {
             ?.substringAfterLast('/')
             .orEmpty()
 
-        val cleanedName = leafName
-            .map { character ->
-                when {
-                    character.code < 32 -> '_'
-                    character.code == 127 -> '_'
-                    character in charArrayOf(
-                        '<', '>', ':', '"', '|', '?', '*'
-                    ) -> '_'
+        val invalidCharacters = charArrayOf(
+            '<', '>', ':', '"', '|', '?', '*'
+        )
 
-                    else -> character
+        val cleanedName = buildString {
+            for (character in leafName) {
+                when {
+                    character.code < 32 -> append('_')
+                    character.code == 127 -> append('_')
+                    character in invalidCharacters -> append('_')
+                    else -> append(character)
                 }
             }
-            .joinToString("")
+        }
             .trim()
             .take(MAX_FILE_NAME_LENGTH)
             .trimEnd('.', ' ')
@@ -157,12 +188,7 @@ internal object TransferProtocol {
     }
 
     /**
-     * Generate a non-conflicting filename without deleting an existing file.
-     *
-     * Example:
-     * photo.jpg
-     * photo (1).jpg
-     * photo (2).jpg
+     * Generate a unique filename without overwriting existing files.
      */
     fun uniqueFileName(
         originalName: String,
@@ -175,7 +201,6 @@ internal object TransferProtocol {
         }
 
         val dotIndex = safeName.lastIndexOf('.')
-
         val hasExtension = dotIndex > 0
 
         val baseName = if (hasExtension) {
