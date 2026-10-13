@@ -21,7 +21,6 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.google.zxing.integration.android.IntentIntegrator
@@ -65,6 +64,9 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     private var connectionInfo: WifiP2pInfo? = null
 
     private var pendingFiles: List<Uri> = emptyList()
+
+    // Receiver IP obtained by scanning a connection QR code.
+    private var qrReceiverIp: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -252,7 +254,8 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
         )
 
         if (requestCode == permissionRequest) {
-            if (grantResults.isNotEmpty() &&
+            if (
+                grantResults.isNotEmpty() &&
                 grantResults.all {
                     it == PackageManager.PERMISSION_GRANTED
                 }
@@ -261,7 +264,9 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 wifiDirect?.discoverPeers()
                 showPeers()
             } else {
-                toast("Permission is required to discover nearby devices.")
+                toast(
+                    "Permission is required to discover nearby devices."
+                )
             }
         }
     }
@@ -392,10 +397,15 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             return
         }
 
-        if (requestCode != pickerRequest ||
+        if (
+            requestCode != pickerRequest ||
             resultCode != RESULT_OK ||
             data == null
         ) {
+            // Clear stale QR state if the file picker was cancelled.
+            if (requestCode == pickerRequest) {
+                qrReceiverIp = null
+            }
             return
         }
 
@@ -412,12 +422,24 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
         }
 
         if (selected.isEmpty()) {
+            qrReceiverIp = null
             toast("No files selected.")
             return
         }
 
-        pendingFiles = selected.distinct()
-        askForReceiverIp()
+        // FIX: if the file picker was opened after scanning a receiver QR,
+        // use that receiver's IP and send the files directly.
+        val files = selected.distinct()
+        val receiverIp = qrReceiverIp
+        qrReceiverIp = null
+
+        if (!receiverIp.isNullOrBlank()) {
+            pendingFiles = emptyList()
+            sendFiles(files, receiverIp)
+        } else {
+            pendingFiles = files
+            askForReceiverIp()
+        }
     }
 
     private fun askForReceiverIp() {
@@ -469,15 +491,15 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     private fun askToSelectFiles(ip: String) {
         AlertDialog.Builder(this)
             .setTitle("Receiver connected")
-            .setMessage("Receiver address: $ip\n\nChoose files to send.")
+            .setMessage(
+                "Receiver address: $ip\n\nChoose files to send."
+            )
             .setNegativeButton("CANCEL", null)
             .setPositiveButton("SELECT FILES") { _, _ ->
                 openFilePickerForReceiver(ip)
             }
             .show()
     }
-
-    private var qrReceiverIp: String? = null
 
     private fun openFilePickerForReceiver(ip: String) {
         qrReceiverIp = ip
@@ -488,7 +510,12 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
 
-        startActivityForResult(intent, pickerRequest)
+        try {
+            startActivityForResult(intent, pickerRequest)
+        } catch (e: Exception) {
+            qrReceiverIp = null
+            toast("Unable to open file picker.")
+        }
     }
 
     // ---------------------------------------------------------
@@ -759,6 +786,11 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             return
         }
 
+        if (!isValidIpv4(ip)) {
+            toast("Invalid receiver IP address.")
+            return
+        }
+
         val page = newPage()
 
         addText(page, "SENDING FILES", 25f, green)
@@ -832,7 +864,9 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
         val size = getFileSize(uri)
 
         if (size < 0L) {
-            throw IOException("Could not determine the file size of $name.")
+            throw IOException(
+                "Could not determine the file size of $name."
+            )
         }
 
         Socket().use { socket ->
@@ -921,7 +955,8 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
 
-                    if (address !is Inet4Address ||
+                    if (
+                        address !is Inet4Address ||
                         address.isLoopbackAddress
                     ) {
                         continue
