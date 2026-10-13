@@ -2,22 +2,35 @@ package com.mafx.share
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.os.Bundle
+import android.content.Intent
+import android.database.Cursor
 import android.graphics.Color
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.content.Intent
-import android.net.Uri
-import android.database.Cursor
-import android.provider.OpenableColumns
-import android.widget.*
-import java.io.*
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.Inet4Address
-import java.net.NetworkInterface
-import java.net.InetSocketAddress
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -25,24 +38,26 @@ class MainActivity : Activity() {
 
     private val green = Color.rgb(22, 163, 74)
     private val blue = Color.rgb(37, 99, 235)
-    private val port = 45872
+
+    private val port = TransferProtocol.PORT
     private val pickFileRequest = 1001
 
     private val executor = Executors.newCachedThreadPool()
     private val receiving = AtomicBoolean(false)
 
+    @Volatile
     private var serverSocket: ServerSocket? = null
-    private var selectedFileUri: Uri? = null
 
-    private lateinit var layout: LinearLayout
-    private lateinit var status: TextView
-    private lateinit var progress: ProgressBar
+    private var layout: LinearLayout? = null
+    private var status: TextView? = null
+    private var progress: ProgressBar? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = green
         window.navigationBarColor = Color.WHITE
+
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
 
@@ -50,12 +65,14 @@ class MainActivity : Activity() {
     }
 
     private fun showHome() {
-        layout = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(24), dp(24), dp(24), dp(24))
             setBackgroundColor(Color.WHITE)
         }
+
+        layout = root
 
         val logo = TextView(this).apply {
             text = "MAFX SHARE"
@@ -79,14 +96,18 @@ class MainActivity : Activity() {
             startReceiving()
         }
 
-        layout.addView(logo, matchWidth())
-        layout.addView(subtitle, matchWidth())
-        addSpace(32)
-        layout.addView(sendButton, matchWidth())
-        addSpace(12)
-        layout.addView(receiveButton, matchWidth())
+        root.addView(logo, matchWidth())
+        root.addView(subtitle, matchWidth())
 
-        setContentView(layout)
+        addSpace(root, 32)
+
+        root.addView(sendButton, matchWidth())
+
+        addSpace(root, 12)
+
+        root.addView(receiveButton, matchWidth())
+
+        setContentView(root)
     }
 
     private fun openFilePicker() {
@@ -98,11 +119,11 @@ class MainActivity : Activity() {
         try {
             startActivityForResult(intent, pickFileRequest)
         } catch (e: Exception) {
-            toast("Unable to open file picker: ${e.message}")
+            toast("Unable to open file picker.")
         }
     }
 
-    @Deprecated("Uses Android Activity result callback for compatibility")
+    @Deprecated("Uses Activity result callback for compatibility")
     override fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
@@ -110,41 +131,66 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode == pickFileRequest && resultCode == RESULT_OK) {
-            val uri = data?.data ?: return
-            selectedFileUri = uri
-            askForReceiverIp(uri)
+        if (requestCode != pickFileRequest ||
+            resultCode != RESULT_OK
+        ) {
+            return
         }
+
+        val uri = data?.data ?: return
+
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: Exception) {
+            // Some document providers do not support persistent access.
+        }
+
+        askForReceiverIp(uri)
     }
 
     private fun askForReceiverIp(uri: Uri) {
         val input = EditText(this).apply {
             hint = "Example: 192.168.1.10"
             setSingleLine(true)
+
             inputType =
-                android.text.InputType.TYPE_CLASS_TEXT or
-                android.text.InputType.TYPE_TEXT_VARIATION_URI
+                InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_URI
         }
 
         AlertDialog.Builder(this)
             .setTitle("Receiver IP address")
             .setMessage(
                 "Connect both phones to the same Wi-Fi or hotspot.\n\n" +
-                    "On the receiving phone, tap RECEIVE FILES and " +
-                    "use the IP address shown there."
+                    "On the receiving phone, tap RECEIVE FILES.\n" +
+                    "Enter the IP address displayed on that phone."
             )
             .setView(input)
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("SEND") { _, _ ->
-                val ip = input.text.toString().trim()
+            .setPositiveButton("SEND", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(
+                        AlertDialog.BUTTON_POSITIVE
+                    ).setOnClickListener {
+                        val ip = input.text.toString().trim()
 
-                if (ip.isBlank()) {
-                    toast("Enter the receiver IP address.")
-                } else {
-                    sendFile(uri, ip)
+                        if (ip.isBlank()) {
+                            input.error = "Enter the receiver IP address."
+                            return@setOnClickListener
+                        }
+
+                        dialog.dismiss()
+                        sendFile(uri, ip)
+                    }
                 }
+
+                dialog.show()
             }
-            .show()
     }
 
     private fun startReceiving() {
@@ -153,59 +199,48 @@ class MainActivity : Activity() {
             return
         }
 
-        layout.removeAllViews()
+        val ipAddress = getLocalIp()
 
-        val title = TextView(this).apply {
-            text = "RECEIVE FILES"
-            textSize = 26f
-            gravity = Gravity.CENTER
-            setTextColor(blue)
+        if (ipAddress == null) {
+            receiving.set(false)
+
+            AlertDialog.Builder(this)
+                .setTitle("Network unavailable")
+                .setMessage(
+                    "No suitable local IPv4 address was found.\n\n" +
+                        "Connect to Wi-Fi or another phone's hotspot, " +
+                        "then try again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+
+            return
         }
 
-        val ip = getLocalIp()
+        val root = createTransferScreen(
+            title = "RECEIVE FILES",
+            titleColor = blue,
+            initialStatus = "Starting receiver..."
+        )
 
         val instructions = TextView(this).apply {
-            text = if (ip != null) {
-                "Connect both phones to the same Wi-Fi or hotspot.\n\n" +
-                    "RECEIVER IP ADDRESS\n$ip\n\n" +
+            text =
+                "RECEIVER IP ADDRESS\n\n" +
+                    "$ipAddress\n\n" +
                     "Port: $port\n\n" +
-                    "Enter this IP on the sending phone."
-            } else {
-                "No local IP address found.\n\n" +
-                    "Connect to Wi-Fi or another phone's hotspot, " +
-                    "then return here and try again."
-            }
+                    "Enter this IP address on the sending phone.\n\n" +
+                    "Keep this screen open while receiving files."
 
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
         }
 
-        status = TextView(this).apply {
-            text = "Starting receiver..."
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setTextColor(green)
-        }
+        root.addView(instructions, 0, matchWidth())
 
-        progress = ProgressBar(
-            this,
-            null,
-            android.R.attr.progressBarStyleHorizontal
-        ).apply {
-            max = 100
-            this.progress = 0
-        }
+        addSpace(root, 20)
 
-        layout.addView(title, matchWidth())
-        addSpace(20)
-        layout.addView(instructions, matchWidth())
-        addSpace(20)
-        layout.addView(status, matchWidth())
-        addSpace(12)
-        layout.addView(progress, matchWidth())
-
-        layout.addView(
+        root.addView(
             makeButton("STOP RECEIVING", blue) {
                 stopReceiving()
                 showHome()
@@ -213,20 +248,33 @@ class MainActivity : Activity() {
             matchWidth()
         )
 
-        if (ip == null) {
-            receiving.set(false)
-            return
-        }
-
         executor.execute {
+            var server: ServerSocket? = null
+
             try {
-                val server = ServerSocket(port)
+                server = ServerSocket()
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(port))
+
                 serverSocket = server
 
                 updateStatus("Waiting for sender...")
 
                 while (receiving.get()) {
-                    val client = server.accept()
+                    val client = try {
+                        server.accept()
+                    } catch (e: IOException) {
+                        if (receiving.get()) {
+                            throw e
+                        }
+
+                        break
+                    }
+
+                    if (!receiving.get()) {
+                        client.close()
+                        break
+                    }
 
                     executor.execute {
                         receiveFile(client)
@@ -234,9 +282,20 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 if (receiving.get()) {
-                    updateStatus("Receiver error: ${e.message}")
+                    updateStatus(
+                        "Receiver error: ${e.message ?: "Unknown error"}"
+                    )
                 }
             } finally {
+                try {
+                    server?.close()
+                } catch (_: Exception) {
+                }
+
+                if (serverSocket === server) {
+                    serverSocket = null
+                }
+
                 receiving.set(false)
             }
         }
@@ -245,31 +304,56 @@ class MainActivity : Activity() {
     private fun receiveFile(socket: Socket) {
         socket.use { connection ->
             try {
+                connection.tcpNoDelay = true
+                connection.soTimeout =
+                    TransferProtocol.SOCKET_READ_TIMEOUT_MS
+
                 val input = DataInputStream(
-                    BufferedInputStream(connection.getInputStream())
+                    BufferedInputStream(
+                        connection.getInputStream()
+                    )
                 )
 
                 val output = DataOutputStream(
-                    BufferedOutputStream(connection.getOutputStream())
+                    BufferedOutputStream(
+                        connection.getOutputStream()
+                    )
                 )
 
+                // Verify that the sender uses the MAFX protocol.
+                if (!TransferProtocol.readAndValidateHeader(input)) {
+                    throw IOException(
+                        "Incompatible MAFX SHARE protocol."
+                    )
+                }
+
                 val receivedName = input.readUTF()
-                val fileName = File(receivedName).name
-                    .replace(Regex("[^A-Za-z0-9._ -]"), "_")
-                    .take(180)
-                    .ifBlank { "received_file" }
 
                 val size = input.readLong()
 
-                if (size < 0L) {
+                if (!TransferProtocol.isValidFileSize(size)) {
+                    output.writeBoolean(false)
+                    output.flush()
+
                     throw IOException("Invalid file size.")
                 }
 
                 val directory = getExternalFilesDir("Received")
-                    ?: throw IOException("Storage directory unavailable.")
+                    ?: throw IOException(
+                        "Destination folder is unavailable."
+                    )
 
                 if (!directory.exists() && !directory.mkdirs()) {
-                    throw IOException("Cannot create destination folder.")
+                    throw IOException(
+                        "Cannot create destination folder."
+                    )
+                }
+
+                val fileName = TransferProtocol.uniqueFileName(
+                    receivedName
+                ) { candidate ->
+                    File(directory, candidate).exists() ||
+                        File(directory, "$candidate.part").exists()
                 }
 
                 val destination = File(directory, fileName)
@@ -278,101 +362,109 @@ class MainActivity : Activity() {
                 output.writeBoolean(true)
                 output.flush()
 
-                val buffer = ByteArray(64 * 1024)
+                val buffer = ByteArray(TransferProtocol.BUFFER_SIZE)
                 var total = 0L
 
-                FileOutputStream(temporary, false).use { fileOutput ->
-                    while (total < size) {
-                        val wanted = minOf(
-                            buffer.size.toLong(),
-                            size - total
-                        ).toInt()
+                try {
+                    FileOutputStream(temporary, false).use { fileOutput ->
+                        while (total < size) {
+                            val wanted = minOf(
+                                buffer.size.toLong(),
+                                size - total
+                            ).toInt()
 
-                        val count = input.read(buffer, 0, wanted)
+                            val count = input.read(
+                                buffer,
+                                0,
+                                wanted
+                            )
 
-                        if (count < 0) {
-                            throw EOFException(
-                                "Connection ended before transfer completed."
+                            if (count < 0) {
+                                throw EOFException(
+                                    "Connection ended before the file " +
+                                        "was fully received."
+                                )
+                            }
+
+                            if (count == 0) {
+                                continue
+                            }
+
+                            fileOutput.write(buffer, 0, count)
+                            total += count
+
+                            val percent =
+                                TransferProtocol.progressPercent(
+                                    total,
+                                    size
+                                )
+
+                            updateProgress(
+                                percent,
+                                "Receiving $fileName: $percent%"
                             )
                         }
 
-                        fileOutput.write(buffer, 0, count)
-                        total += count
+                        fileOutput.fd.sync()
+                    }
 
-                        val percent =
-                            if (size == 0L) 100
-                            else ((total * 100L) / size).toInt()
-
-                        updateProgress(
-                            percent,
-                            "Receiving $fileName: $percent%"
+                    if (destination.exists()) {
+                        throw IOException(
+                            "Destination already exists."
                         )
                     }
 
-                    fileOutput.fd.sync()
+                    if (!temporary.renameTo(destination)) {
+                        throw IOException(
+                            "Could not finalize the received file."
+                        )
+                    }
+
+                    updateProgress(
+                        100,
+                        "Received successfully!\n\n" +
+                            "$fileName\n\n" +
+                            "Saved in the app's Received folder."
+                    )
+                } catch (e: Exception) {
+                    // Keep an incomplete .part file for possible
+                    // future recovery rather than deleting user data.
+                    throw e
                 }
-
-                if (destination.exists() && !destination.delete()) {
-                    throw IOException("Cannot replace existing destination.")
-                }
-
-                if (!temporary.renameTo(destination)) {
-                    throw IOException("Could not finalize received file.")
-                }
-
-                updateProgress(
-                    100,
-                    "Received successfully!\n$fileName\n\n" +
-                        "Saved in the app's Received folder."
-                )
-
             } catch (e: Exception) {
-                updateStatus("Transfer failed: ${e.message}")
+                updateStatus(
+                    "Transfer failed: " +
+                        (e.message ?: "Connection error")
+                )
             }
         }
     }
 
     private fun sendFile(uri: Uri, ip: String) {
-        val fileName = getFileName(uri)
+        val originalName = getFileName(uri)
+
+        val fileName = TransferProtocol.safeFileName(originalName)
         val size = getFileSize(uri)
 
         if (size < 0L) {
-            toast("Cannot determine file size for this file.")
+            toast(
+                "Cannot determine the file size. " +
+                    "Choose a file with a known size."
+            )
             return
         }
 
-        layout.removeAllViews()
+        createTransferScreen(
+            title = "SENDING FILE",
+            titleColor = green,
+            initialStatus = "Connecting to $ip..."
+        )
 
-        val title = TextView(this).apply {
-            text = "SENDING FILE"
-            textSize = 25f
-            gravity = Gravity.CENTER
-            setTextColor(green)
-        }
+        val root = layout ?: return
 
-        status = TextView(this).apply {
-            text = "Connecting to $ip..."
-            textSize = 17f
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-        }
+        addSpace(root, 20)
 
-        progress = ProgressBar(
-            this,
-            null,
-            android.R.attr.progressBarStyleHorizontal
-        ).apply {
-            max = 100
-            this.progress = 0
-        }
-
-        layout.addView(title, matchWidth())
-        addSpace(24)
-        layout.addView(status, matchWidth())
-        addSpace(16)
-        layout.addView(progress, matchWidth())
-
-        layout.addView(
+        root.addView(
             makeButton("BACK TO HOME", blue) {
                 showHome()
             },
@@ -384,18 +476,27 @@ class MainActivity : Activity() {
                 Socket().use { socket ->
                     socket.connect(
                         InetSocketAddress(ip, port),
-                        10000
+                        TransferProtocol.CONNECT_TIMEOUT_MS
                     )
 
                     socket.tcpNoDelay = true
+                    socket.soTimeout =
+                        TransferProtocol.SOCKET_READ_TIMEOUT_MS
 
                     val output = DataOutputStream(
-                        BufferedOutputStream(socket.getOutputStream())
+                        BufferedOutputStream(
+                            socket.getOutputStream()
+                        )
                     )
 
                     val input = DataInputStream(
-                        BufferedInputStream(socket.getInputStream())
+                        BufferedInputStream(
+                            socket.getInputStream()
+                        )
                     )
+
+                    // Protocol header must match the receiver.
+                    TransferProtocol.writeHeader(output)
 
                     output.writeUTF(fileName)
                     output.writeLong(size)
@@ -404,14 +505,20 @@ class MainActivity : Activity() {
                     val accepted = input.readBoolean()
 
                     if (!accepted) {
-                        throw IOException("Receiver did not accept the file.")
+                        throw IOException(
+                            "The receiver rejected this file."
+                        )
                     }
 
                     val source = contentResolver.openInputStream(uri)
-                        ?: throw IOException("Cannot open selected file.")
+                        ?: throw IOException(
+                            "Cannot open the selected file."
+                        )
 
                     source.use { stream ->
-                        val buffer = ByteArray(64 * 1024)
+                        val buffer =
+                            ByteArray(TransferProtocol.BUFFER_SIZE)
+
                         var total = 0L
 
                         while (total < size) {
@@ -420,20 +527,31 @@ class MainActivity : Activity() {
                                 size - total
                             ).toInt()
 
-                            val count = stream.read(buffer, 0, wanted)
+                            val count = stream.read(
+                                buffer,
+                                0,
+                                wanted
+                            )
 
                             if (count < 0) {
                                 throw EOFException(
-                                    "Source file ended before transfer completed."
+                                    "The source file ended before " +
+                                        "the transfer completed."
                                 )
+                            }
+
+                            if (count == 0) {
+                                continue
                             }
 
                             output.write(buffer, 0, count)
                             total += count
 
                             val percent =
-                                if (size == 0L) 100
-                                else ((total * 100L) / size).toInt()
+                                TransferProtocol.progressPercent(
+                                    total,
+                                    size
+                                )
 
                             updateProgress(
                                 percent,
@@ -446,17 +564,71 @@ class MainActivity : Activity() {
 
                     updateProgress(
                         100,
-                        "File sent successfully!\n$fileName"
+                        "File sent successfully!\n\n$fileName"
                     )
                 }
             } catch (e: Exception) {
                 updateStatus(
-                    "Send failed: ${e.message}\n\n" +
-                        "Check that both phones are on the same network " +
-                        "and that the receiver is waiting."
+                    "Send failed: " +
+                        (e.message ?: "Connection error") +
+                        "\n\nCheck that both phones are connected " +
+                        "to the same network and that the receiver " +
+                        "is waiting."
                 )
             }
         }
+    }
+
+    private fun createTransferScreen(
+        title: String,
+        titleColor: Int,
+        initialStatus: String
+    ): LinearLayout {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            setBackgroundColor(Color.WHITE)
+        }
+
+        layout = root
+
+        val heading = TextView(this).apply {
+            text = title
+            textSize = 25f
+            gravity = Gravity.CENTER
+            setTextColor(titleColor)
+        }
+
+        status = TextView(this).apply {
+            text = initialStatus
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+        }
+
+        progress = ProgressBar(
+            this,
+            null,
+            android.R.attr.progressBarStyleHorizontal
+        ).apply {
+            max = 100
+            this.progress = 0
+        }
+
+        root.addView(heading, matchWidth())
+
+        addSpace(root, 24)
+
+        root.addView(status, matchWidth())
+
+        addSpace(root, 16)
+
+        root.addView(progress, matchWidth())
+
+        setContentView(root)
+
+        return root
     }
 
     private fun getFileName(uri: Uri): String {
@@ -472,7 +644,9 @@ class MainActivity : Activity() {
 
         cursor?.use {
             if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val index = it.getColumnIndex(
+                    OpenableColumns.DISPLAY_NAME
+                )
 
                 if (index >= 0) {
                     name = it.getString(index) ?: name
@@ -494,7 +668,9 @@ class MainActivity : Activity() {
 
         cursor?.use {
             if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.SIZE)
+                val index = it.getColumnIndex(
+                    OpenableColumns.SIZE
+                )
 
                 if (index >= 0 && !it.isNull(index)) {
                     return it.getLong(index)
@@ -506,8 +682,12 @@ class MainActivity : Activity() {
     }
 
     private fun getLocalIp(): String? {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
+        return try {
+            val interfaces =
+                NetworkInterface.getNetworkInterfaces()
+                    ?: return null
+
+            val addressesFound = mutableListOf<Pair<Int, String>>()
 
             while (interfaces.hasMoreElements()) {
                 val network = interfaces.nextElement()
@@ -521,23 +701,40 @@ class MainActivity : Activity() {
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
 
-                    if (address is Inet4Address &&
-                        !address.isLoopbackAddress
+                    if (address !is Inet4Address ||
+                        address.isLoopbackAddress
                     ) {
-                        val host = address.hostAddress
-
-                        if (host != null &&
-                            !host.startsWith("169.254.")
-                        ) {
-                            return host
-                        }
+                        continue
                     }
+
+                    val host = address.hostAddress ?: continue
+
+                    if (host.startsWith("169.254.")) {
+                        continue
+                    }
+
+                    // Prefer typical Wi-Fi and hotspot interfaces.
+                    val interfaceName =
+                        network.name.lowercase()
+
+                    val priority = when {
+                        interfaceName.startsWith("wlan") -> 0
+                        interfaceName.startsWith("ap") -> 1
+                        interfaceName.startsWith("wifi") -> 2
+                        else -> 3
+                    }
+
+                    addressesFound.add(priority to host)
                 }
             }
-        } catch (_: Exception) {
-        }
 
-        return null
+            addressesFound
+                .sortedBy { it.first }
+                .firstOrNull()
+                ?.second
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun stopReceiving() {
@@ -553,21 +750,17 @@ class MainActivity : Activity() {
 
     private fun updateStatus(message: String) {
         runOnUiThread {
-            if (::status.isInitialized) {
-                status.text = message
-            }
+            status?.text = message
         }
     }
 
-    private fun updateProgress(percent: Int, message: String) {
+    private fun updateProgress(
+        percent: Int,
+        message: String
+    ) {
         runOnUiThread {
-            if (::progress.isInitialized) {
-                progress.progress = percent
-            }
-
-            if (::status.isInitialized) {
-                status.text = message
-            }
+            progress?.progress = percent.coerceIn(0, 100)
+            status?.text = message
         }
     }
 
@@ -580,7 +773,9 @@ class MainActivity : Activity() {
             text = label
             setTextColor(Color.WHITE)
             setBackgroundColor(color)
-            setOnClickListener { action() }
+            setOnClickListener {
+                action()
+            }
         }
     }
 
@@ -591,10 +786,13 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun addSpace(height: Int) {
+    private fun addSpace(
+        parent: LinearLayout,
+        height: Int
+    ) {
         val space = View(this)
 
-        layout.addView(
+        parent.addView(
             space,
             LinearLayout.LayoutParams(
                 1,
@@ -604,7 +802,9 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
+        return (
+            value * resources.displayMetrics.density
+        ).toInt()
     }
 
     private fun toast(message: String) {
