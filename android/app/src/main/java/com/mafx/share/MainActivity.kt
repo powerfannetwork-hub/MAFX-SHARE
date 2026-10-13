@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     private val blue = Color.rgb(15, 105, 245)
     private val navy = Color.rgb(8, 35, 62)
     private val white = Color.WHITE
-    private val background = Color.rgb(244, 248, 252)
+    private val pageBackground = Color.rgb(244, 248, 252)
     private val textColor = Color.rgb(30, 43, 60)
     private val muted = Color.rgb(115, 130, 148)
 
@@ -33,17 +33,20 @@ class MainActivity : AppCompatActivity() {
 
         window.statusBarColor = navy
         window.navigationBarColor = white
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        @Suppress("DEPRECATION")
+        run {
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(background)
+            setBackgroundColor(pageBackground)
         }
 
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(background)
+            setBackgroundColor(pageBackground)
         }
 
         bottomBar = LinearLayout(this).apply {
@@ -102,9 +105,11 @@ class MainActivity : AppCompatActivity() {
             text = value
             textSize = size
             setTextColor(color)
+
             if (bold) {
                 setTypeface(null, Typeface.BOLD)
             }
+
             gravity = Gravity.CENTER_VERTICAL
         }
     }
@@ -119,9 +124,13 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             isAllCaps = false
             setTextColor(white)
-            background = rounded(color, 16)
+
+            setBackground(rounded(color, 16))
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            setOnClickListener { onClick() }
+
+            setOnClickListener {
+                onClick()
+            }
         }
     }
 
@@ -131,8 +140,13 @@ class MainActivity : AppCompatActivity() {
     ): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(padding), dp(padding), dp(padding), dp(padding))
-            background = rounded(white, 20)
+            setPadding(
+                dp(padding),
+                dp(padding),
+                dp(padding),
+                dp(padding)
+            )
+            setBackground(rounded(white, 20))
             elevation = dp(2)
         }
 
@@ -188,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     private fun showPage(page: String) {
         currentPage = page
         content.removeAllViews()
-        content.background = rounded(background, 0)
+        content.setBackgroundColor(pageBackground)
 
         when (page) {
             "Home" -> homePage()
@@ -199,8 +213,10 @@ class MainActivity : AppCompatActivity() {
             "Transfers" -> transfersPage()
             "History" -> historyPage()
             "Settings" -> settingsPage()
+
             "Photos", "Videos", "Music", "Apps", "Files" ->
                 categoryPage(page)
+
             else -> homePage()
         }
 
@@ -208,15 +224,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scrollPage(): LinearLayout {
-        val scroll = ScrollView(this)
-        scroll.isFillViewport = true
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+        }
 
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(16))
         }
 
-        scroll.addView(page)
+        scroll.addView(
+            page,
+            ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         content.addView(
             scroll,
@@ -236,17 +260,24 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(20), dp(28), dp(20), dp(28))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(navy, Color.rgb(0, 81, 145), blue)
-            ).apply {
-                cornerRadii = floatArrayOf(
-                    dp(0).toFloat(), dp(0).toFloat(),
-                    dp(0).toFloat(), dp(0).toFloat(),
-                    dp(25).toFloat(), dp(25).toFloat(),
-                    dp(25).toFloat(), dp(25).toFloat()
-                )
-            }
+
+            setBackground(
+                GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(
+                        navy,
+                        Color.rgb(0, 81, 145),
+                        blue
+                    )
+                ).apply {
+                    cornerRadii = floatArrayOf(
+                        0f, 0f,
+                        0f, 0f,
+                        dp(25).toFloat(), dp(25).toFloat(),
+                        dp(25).toFloat(), dp(25).toFloat()
+                    )
+                }
+            )
         }
 
         banner.addView(
@@ -281,7 +312,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         actions.addView(
-            actionCard("➤", "SEND", "Send files to another device", green) {
+            actionCard(
+                "➤",
+                "SEND",
+                "Send files to another device",
+                green
+            ) {
                 showPage("Send")
             },
             LinearLayout.LayoutParams(0, dp(164), 1f).apply {
@@ -290,7 +326,12 @@ class MainActivity : AppCompatActivity() {
         )
 
         actions.addView(
-            actionCard("⬇", "RECEIVE", "Receive files from another device", blue) {
+            actionCard(
+                "⬇",
+                "RECEIVE",
+                "Receive files from another device",
+                blue
+            ) {
                 showPage("Receive")
             },
             LinearLayout.LayoutParams(0, dp(164), 1f).apply {
@@ -322,6 +363,7 @@ class MainActivity : AppCompatActivity() {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
                     setPadding(dp(4), dp(8), dp(4), dp(8))
+
                     setOnClickListener {
                         if (name == "More") {
                             showPage("Settings")
@@ -336,7 +378,7 @@ class MainActivity : AppCompatActivity() {
                     textSize = 25f
                     setTextColor(white)
                     gravity = Gravity.CENTER
-                    background = rounded(color, 14)
+                    setBackground(rounded(color, 14))
                 }
 
                 item.addView(
@@ -369,12 +411,24 @@ class MainActivity : AppCompatActivity() {
 
         val status = card(page)
 
-        status.addView(label("DEVICE STATUS", 12f, muted, true))
-        space(status, 8)
-        status.addView(label("●  MAFX SHARE is ready", 15f, green, true))
-        space(status, 4)
         status.addView(
-            label("Connect two devices to begin sharing.", 13f, muted)
+            label("DEVICE STATUS", 12f, muted, true)
+        )
+
+        space(status, 8)
+
+        status.addView(
+            label("●  MAFX SHARE is ready", 15f, green, true)
+        )
+
+        space(status, 4)
+
+        status.addView(
+            label(
+                "Connect two devices to begin sharing.",
+                13f,
+                muted
+            )
         )
     }
 
@@ -389,8 +443,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(10), dp(8), dp(10))
-            background = rounded(color, 22)
-            setOnClickListener { click() }
+            setBackground(rounded(color, 22))
+
+            setOnClickListener {
+                click()
+            }
 
             addView(
                 label(icon, 34f, white, true).apply {
@@ -430,6 +487,7 @@ class MainActivity : AppCompatActivity() {
 
         for ((icon, name) in categories) {
             val box = card(page, 14)
+
             box.orientation = LinearLayout.HORIZONTAL
             box.gravity = Gravity.CENTER_VERTICAL
 
@@ -453,9 +511,17 @@ class MainActivity : AppCompatActivity() {
         space(page, 12)
 
         val info = card(page)
-        info.addView(label("Selected files", 17f, textColor, true))
+
+        info.addView(
+            label("Selected files", 17f, textColor, true)
+        )
+
         space(info, 6)
-        info.addView(label("No files selected", 13f, muted))
+
+        info.addView(
+            label("No files selected", 13f, muted)
+        )
+
         space(info, 12)
 
         info.addView(
@@ -472,7 +538,11 @@ class MainActivity : AppCompatActivity() {
     private fun categoryPage(category: String) {
         val page = scrollPage()
 
-        heading(page, category, "Select files to prepare for sharing")
+        heading(
+            page,
+            category,
+            "Select files to prepare for sharing"
+        )
 
         val box = card(page)
         box.gravity = Gravity.CENTER
@@ -500,7 +570,7 @@ class MainActivity : AppCompatActivity() {
                 muted
             ).apply {
                 gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
+                gravity = Gravity.CENTER
             }
         )
 
@@ -520,10 +590,15 @@ class MainActivity : AppCompatActivity() {
     private fun receivePage() {
         val page = scrollPage()
 
-        heading(page, "Receiving Files", "Get ready to receive files")
+        heading(
+            page,
+            "Receiving Files",
+            "Get ready to receive files"
+        )
 
         val box = card(page)
         box.gravity = Gravity.CENTER
+
         space(box, 10)
 
         box.addView(
@@ -549,7 +624,6 @@ class MainActivity : AppCompatActivity() {
                 muted
             ).apply {
                 gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT.CENTER
             }
         )
 
@@ -568,20 +642,32 @@ class MainActivity : AppCompatActivity() {
         space(page, 10)
 
         val note = card(page)
-        note.addView(label("Connection status", 15f, textColor, true))
+
+        note.addView(
+            label("Connection status", 15f, textColor, true)
+        )
+
         space(note, 8)
-        note.addView(label("Not connected", 14f, muted))
+
+        note.addView(
+            label("Not connected", 14f, muted)
+        )
     }
 
     private fun connectPage() {
         val page = scrollPage()
 
-        heading(page, "Connect to Device", "Choose a connection method")
+        heading(
+            page,
+            "Connect to Device",
+            "Choose a connection method"
+        )
 
         val hero = card(page)
+
         hero.gravity = Gravity.CENTER
         hero.setPadding(dp(20), dp(28), dp(20), dp(28))
-        hero.background = rounded(navy, 24)
+        hero.setBackground(rounded(navy, 24))
 
         hero.addView(
             label("◎", 70f, Color.rgb(0, 220, 190), true).apply {
@@ -600,11 +686,7 @@ class MainActivity : AppCompatActivity() {
         space(hero, 8)
 
         hero.addView(
-            label(
-                "Select a method to continue.",
-                13f,
-                white
-            ).apply {
+            label("Select a method to continue.", 13f, white).apply {
                 gravity = Gravity.CENTER
             }
         )
@@ -617,6 +699,7 @@ class MainActivity : AppCompatActivity() {
 
         for ((icon, title, subtitle) in methods) {
             val box = card(page, 14)
+
             box.orientation = LinearLayout.HORIZONTAL
             box.gravity = Gravity.CENTER_VERTICAL
 
@@ -629,20 +712,30 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
             }
 
-            texts.addView(label(title, 15f, textColor, true))
-            texts.addView(label(subtitle, 11f, muted))
+            texts.addView(
+                label(title, 15f, textColor, true)
+            )
+
+            texts.addView(
+                label(subtitle, 11f, muted)
+            )
 
             box.addView(
                 texts,
                 LinearLayout.LayoutParams(0, dp(48), 1f)
             )
 
-            box.addView(label("›", 25f, muted))
+            box.addView(
+                label("›", 25f, muted)
+            )
 
             box.setOnClickListener {
                 when (title) {
-                    "Wi-Fi Direct", "Hotspot" -> showPage("Nearby Devices")
-                    "Scan QR Code" -> showPage("Receive")
+                    "Wi-Fi Direct", "Hotspot" ->
+                        showPage("Nearby Devices")
+
+                    "Scan QR Code" ->
+                        showPage("Receive")
                 }
             }
         }
@@ -665,11 +758,20 @@ class MainActivity : AppCompatActivity() {
     private fun nearbyPage() {
         val page = scrollPage()
 
-        heading(page, "Nearby Devices", "Available connection options")
+        heading(
+            page,
+            "Nearby Devices",
+            "Available connection options"
+        )
 
         val info = card(page)
-        info.addView(label("Device discovery", 17f, textColor, true))
+
+        info.addView(
+            label("Device discovery", 17f, textColor, true)
+        )
+
         space(info, 8)
+
         info.addView(
             label(
                 "Real device discovery will be connected in the networking stage.",
@@ -679,6 +781,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         val localDevice = card(page)
+
         localDevice.orientation = LinearLayout.HORIZONTAL
         localDevice.gravity = Gravity.CENTER_VERTICAL
 
@@ -692,7 +795,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         deviceInfo.addView(
-            label(android.os.Build.MODEL ?: "Android Device", 15f, textColor, true)
+            label(
+                android.os.Build.MODEL ?: "Android Device",
+                15f,
+                textColor,
+                true
+            )
         )
 
         deviceInfo.addView(
@@ -704,7 +812,9 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(0, dp(55), 1f)
         )
 
-        localDevice.addView(label("✓", 22f, green, true))
+        localDevice.addView(
+            label("✓", 22f, green, true)
+        )
 
         space(page, 10)
 
@@ -721,8 +831,13 @@ class MainActivity : AppCompatActivity() {
         )
 
         val warning = card(page)
-        warning.addView(label("Connection", 16f, textColor, true))
+
+        warning.addView(
+            label("Connection", 16f, textColor, true)
+        )
+
         space(warning, 6)
+
         warning.addView(
             label(
                 "No remote device is confirmed connected yet.",
@@ -735,9 +850,14 @@ class MainActivity : AppCompatActivity() {
     private fun transfersPage() {
         val page = scrollPage()
 
-        heading(page, "Transfers", "Monitor your file transfers")
+        heading(
+            page,
+            "Transfers",
+            "Monitor your file transfers"
+        )
 
         val tabs = card(page)
+
         tabs.orientation = LinearLayout.HORIZONTAL
 
         tabs.addView(
@@ -751,7 +871,9 @@ class MainActivity : AppCompatActivity() {
         )
 
         val empty = card(page)
+
         empty.gravity = Gravity.CENTER
+
         space(empty, 25)
 
         empty.addView(
@@ -798,10 +920,16 @@ class MainActivity : AppCompatActivity() {
     private fun historyPage() {
         val page = scrollPage()
 
-        heading(page, "History", "Previously sent and received files")
+        heading(
+            page,
+            "History",
+            "Previously sent and received files"
+        )
 
         val box = card(page)
+
         box.gravity = Gravity.CENTER
+
         space(box, 24)
 
         box.addView(
@@ -836,9 +964,14 @@ class MainActivity : AppCompatActivity() {
     private fun settingsPage() {
         val page = scrollPage()
 
-        heading(page, "Settings", "Customize your experience")
+        heading(
+            page,
+            "Settings",
+            "Customize your experience"
+        )
 
         val device = card(page)
+
         device.orientation = LinearLayout.HORIZONTAL
         device.gravity = Gravity.CENTER_VERTICAL
 
@@ -856,7 +989,11 @@ class MainActivity : AppCompatActivity() {
         )
 
         deviceText.addView(
-            label(android.os.Build.MODEL ?: "Android Device", 12f, muted)
+            label(
+                android.os.Build.MODEL ?: "Android Device",
+                12f,
+                muted
+            )
         )
 
         device.addView(deviceText)
@@ -886,6 +1023,7 @@ class MainActivity : AppCompatActivity() {
         subtitle: String
     ) {
         val box = card(page, 13)
+
         box.orientation = LinearLayout.HORIZONTAL
         box.gravity = Gravity.CENTER_VERTICAL
 
@@ -898,15 +1036,22 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        texts.addView(label(title, 14f, textColor, true))
-        texts.addView(label(subtitle, 12f, muted))
+        texts.addView(
+            label(title, 14f, textColor, true)
+        )
+
+        texts.addView(
+            label(subtitle, 12f, muted)
+        )
 
         box.addView(
             texts,
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
 
-        box.addView(label("›", 24f, muted))
+        box.addView(
+            label("›", 24f, muted)
+        )
     }
 
     private fun buildBottomBar() {
@@ -926,6 +1071,7 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 setPadding(0, dp(5), 0, dp(3))
+
                 setOnClickListener {
                     showPage(destination)
                 }
