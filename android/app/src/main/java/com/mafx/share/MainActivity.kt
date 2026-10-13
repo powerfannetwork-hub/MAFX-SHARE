@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
 
         window.statusBarColor = navy
         window.navigationBarColor = white
+
         @Suppress("DEPRECATION")
         run {
             window.decorView.systemUiVisibility =
@@ -53,7 +54,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setBackgroundColor(white)
-            elevation = dp(10)
+            elevation = dp(10).toFloat()
         }
 
         root.addView(
@@ -124,7 +125,6 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             isAllCaps = false
             setTextColor(white)
-
             setBackground(rounded(color, 16))
             setPadding(dp(12), dp(8), dp(12), dp(8))
 
@@ -140,14 +140,16 @@ class MainActivity : AppCompatActivity() {
     ): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+
             setPadding(
                 dp(padding),
                 dp(padding),
                 dp(padding),
                 dp(padding)
             )
+
             setBackground(rounded(white, 20))
-            elevation = dp(2)
+            elevation = dp(2).toFloat()
         }
 
         val params = LinearLayout.LayoutParams(
@@ -161,7 +163,10 @@ class MainActivity : AppCompatActivity() {
         return box
     }
 
-    private fun space(parent: LinearLayout, height: Int = 12) {
+    private fun space(
+        parent: LinearLayout,
+        height: Int = 12
+    ) {
         parent.addView(
             View(this),
             LinearLayout.LayoutParams(
@@ -234,13 +239,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, dp(16))
         }
 
-        scroll.addView(
-            page,
-            ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
-            )
-        )
+        // Use addView(page) to avoid the ScrollView.LayoutParams error.
+        scroll.addView(page)
 
         content.addView(
             scroll,
@@ -466,6 +466,7 @@ class MainActivity : AppCompatActivity() {
             addView(
                 label(subtitle, 11f, white).apply {
                     gravity = Gravity.CENTER
+                    gravity = Gravity.CENTER
                     textAlignment = View.TEXT_ALIGNMENT_CENTER
                 }
             )
@@ -570,7 +571,7 @@ class MainActivity : AppCompatActivity() {
                 muted
             ).apply {
                 gravity = Gravity.CENTER
-                gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
             }
         )
 
@@ -624,6 +625,7 @@ class MainActivity : AppCompatActivity() {
                 muted
             ).apply {
                 gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
             }
         )
 
