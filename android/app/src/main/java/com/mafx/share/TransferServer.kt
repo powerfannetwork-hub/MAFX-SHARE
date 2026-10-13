@@ -10,17 +10,18 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.net.ServerSocket
+import java.net.Socket
 import java.net.SocketException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Receives one file at a time over TCP and saves it to Downloads/MAFX SHARE. */
 class TransferServer(
     context: Context,
-    private val port: Int = 8988
+    private val port: Int = DEFAULT_PORT
 ) {
     companion object {
         const val DEFAULT_PORT = 8988
-        private const val MAX_FILE_SIZE = 8L * 1024 * 1024 * 1024
     }
 
     private val appContext = context.applicationContext
@@ -58,90 +59,75 @@ class TransferServer(
                 }
             } catch (e: Exception) {
                 if (running.get()) {
-                    onError?.invoke(
-                        e.message ?: "Unable to receive file."
-                    )
+                    onError?.invoke(e.message ?: "Unable to receive file.")
                 }
             } finally {
-                running.set(false)
                 serverSocket = null
+                running.set(false)
             }
         }
     }
 
-    private fun receiveFile(socket: java.net.Socket) {
-        val input = DataInputStream(
-            BufferedInputStream(socket.getInputStream())
-        )
-
-        val originalName = input.readUTF()
-        val filename = sanitizeFilename(originalName)
+    private fun receiveFile(socket: Socket) {
+        val input = DataInputStream(BufferedInputStream(socket.getInputStream()))
+        val filename = sanitizeFilename(input.readUTF())
         val fileSize = input.readLong()
 
-        if (filename.isBlank()) {
-            throw IOException("Invalid filename.")
-        }
+        if (filename.isBlank()) throw IOException("Invalid filename.")
+        if (fileSize < 0L) throw IOException("Invalid file size.")
 
-        if (fileSize < 0 || fileSize > MAX_FILE_SIZE) {
-            throw IOException("Invalid file size.")
-        }
-
+        // Stream data in fixed-size chunks; the complete file is never loaded into RAM.
         val uri = createDestination(filename)
         var received = 0L
+        var completed = false
 
         try {
-            val output = appContext.contentResolver
-                .openOutputStream(uri, "w")
+            val output = appContext.contentResolver.openOutputStream(uri, "w")
                 ?: throw IOException("Cannot create destination file.")
 
             output.use { out ->
-                val buffer = ByteArray(64 * 1024)
+                val buffer = ByteArray(1024 * 1024) // 1 MiB buffer
 
                 while (received < fileSize) {
-                    val wanted = minOf(
-                        buffer.size.toLong(),
-                        fileSize - received
-                    ).toInt()
-
+                    val wanted = minOf(buffer.size.toLong(), fileSize - received).toInt()
                     val count = input.read(buffer, 0, wanted)
 
-                    if (count < 0) {
-                        throw IOException("Transfer interrupted.")
-                    }
+                    if (count < 0) throw IOException("Transfer interrupted before the file was complete.")
+                    if (count == 0) continue
 
                     out.write(buffer, 0, count)
-                    received += count
+                    received += count.toLong()
                 }
-
                 out.flush()
             }
-        } catch (e: Exception) {
-            try {
-                appContext.contentResolver.delete(uri, null, null)
-            } catch (_: Exception) {
+
+            // Publish the file only after all expected bytes have been written.
+            finishDestination(uri)
+            completed = true
+            onFileReceived?.invoke(filename, received)
+        } finally {
+            if (!completed) {
+                try {
+                    appContext.contentResolver.delete(uri, null, null)
+                } catch (_: Exception) {
+                    // Keep the original transfer error.
+                }
             }
-
-            throw e
         }
-
-        onFileReceived?.invoke(filename, received)
     }
 
     private fun createDestination(filename: String): Uri {
         val resolver = appContext.contentResolver
-
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            put(
-                MediaStore.MediaColumns.MIME_TYPE,
-                "application/octet-stream"
-            )
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
                     "${Environment.DIRECTORY_DOWNLOADS}/MAFX SHARE"
                 )
+                // Keep the file hidden from other apps until transfer completes.
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
         }
@@ -152,39 +138,35 @@ class TransferServer(
             MediaStore.Files.getContentUri("external")
         }
 
-        val uri = resolver.insert(collection, values)
+        return resolver.insert(collection, values)
             ?: throw IOException("Cannot create destination file.")
+    }
 
+    private fun finishDestination(uri: Uri) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val completed = ContentValues().apply {
+            val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.IS_PENDING, 0)
             }
-
-            resolver.update(uri, completed, null, null)
+            val updated = appContext.contentResolver.update(uri, values, null, null)
+            if (updated <= 0) throw IOException("Could not finalize the received file.")
         }
-
-        return uri
     }
 
     private fun sanitizeFilename(name: String): String {
         return name
             .substringAfterLast('/')
             .substringAfterLast('\\')
-            .filter {
-                it >= ' ' &&
-                    it != '\u007f' &&
-                    it !in "<>:\"|?*"
-            }
+            .filter { it >= ' ' && it != '\u007f' && it !in "<>:\"|?*" }
             .take(240)
             .trim()
     }
 
     fun stop() {
         running.set(false)
-
         try {
             serverSocket?.close()
         } catch (_: Exception) {
+            // The server may already be closed.
         }
     }
 }
