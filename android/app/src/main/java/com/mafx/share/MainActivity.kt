@@ -12,6 +12,7 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
@@ -65,7 +66,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
     private var pendingFiles: List<Uri> = emptyList()
 
-    // Receiver IP obtained by scanning a connection QR code.
+    @Volatile
     private var qrReceiverIp: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -215,6 +216,48 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
         }
     }
 
+    /**
+     * Avoid scheduling excessive UI updates during large transfers.
+     * The data transfer itself continues independently of the UI.
+     */
+    private fun shouldUpdateProgress(
+        lastUpdateTime: Long,
+        lastUpdateBytes: Long,
+        currentBytes: Long,
+        finished: Boolean
+    ): Boolean {
+        if (finished) return true
+
+        val now = SystemClock.elapsedRealtime()
+
+        return now - lastUpdateTime >=
+            TransferProtocol.PROGRESS_UPDATE_INTERVAL_MS ||
+            currentBytes - lastUpdateBytes >=
+            TransferProtocol.PROGRESS_UPDATE_BYTES
+    }
+
+    /**
+     * Apply socket settings suitable for bulk file transfers.
+     * Android treats the buffer sizes as requested hints.
+     */
+    private fun configureTransferSocket(socket: Socket) {
+        socket.tcpNoDelay = true
+        socket.keepAlive = true
+        socket.soTimeout = TransferProtocol.SOCKET_READ_TIMEOUT_MS
+
+        try {
+            socket.sendBufferSize = 1024 * 1024
+        } catch (_: Exception) {
+            // The operating system may not accept the requested size.
+        }
+
+        try {
+            socket.receiveBufferSize = 1024 * 1024
+        } catch (_: Exception) {
+            // The operating system may not accept the requested size.
+        }
+    }
+
     // ---------------------------------------------------------
     // WI-FI DIRECT
     // ---------------------------------------------------------
@@ -351,7 +394,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
         try {
             startActivityForResult(intent, pickerRequest)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             toast("Unable to open file picker.")
         }
     }
@@ -364,7 +407,6 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        // First check whether the result belongs to QR scanning.
         val qrResult = IntentIntegrator.parseActivityResult(
             requestCode,
             resultCode,
@@ -402,7 +444,6 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             resultCode != RESULT_OK ||
             data == null
         ) {
-            // Clear stale QR state if the file picker was cancelled.
             if (requestCode == pickerRequest) {
                 qrReceiverIp = null
             }
@@ -427,8 +468,6 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
             return
         }
 
-        // FIX: if the file picker was opened after scanning a receiver QR,
-        // use that receiver's IP and send the files directly.
         val files = selected.distinct()
         val receiverIp = qrReceiverIp
         qrReceiverIp = null
@@ -512,7 +551,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
         try {
             startActivityForResult(intent, pickerRequest)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             qrReceiverIp = null
             toast("Unable to open file picker.")
         }
@@ -532,7 +571,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                     IntentIntegrator.QR_CODE
                 )
                 .initiateScan()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             toast("Unable to start QR scanner.")
         }
     }
@@ -547,7 +586,7 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
         val bitmap: Bitmap = try {
             QrCodeHelper.createBitmap(payload)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             toast("Could not generate QR code.")
             return
         }
@@ -676,16 +715,20 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
     private fun receiveFile(socket: Socket) {
         socket.use { connection ->
             try {
-                connection.tcpNoDelay = true
-                connection.soTimeout =
-                    TransferProtocol.SOCKET_READ_TIMEOUT_MS
+                configureTransferSocket(connection)
 
                 val input = DataInputStream(
-                    BufferedInputStream(connection.getInputStream())
+                    BufferedInputStream(
+                        connection.getInputStream(),
+                        TransferProtocol.BUFFER_SIZE
+                    )
                 )
 
                 val output = DataOutputStream(
-                    BufferedOutputStream(connection.getOutputStream())
+                    BufferedOutputStream(
+                        connection.getOutputStream(),
+                        TransferProtocol.BUFFER_SIZE
+                    )
                 )
 
                 if (!TransferProtocol.readAndValidateHeader(input)) {
@@ -723,7 +766,10 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 output.flush()
 
                 val buffer = ByteArray(TransferProtocol.BUFFER_SIZE)
+
                 var total = 0L
+                var lastUpdateTime = SystemClock.elapsedRealtime()
+                var lastUpdateBytes = 0L
 
                 FileOutputStream(temporary).use { fileOutput ->
                     while (total < size) {
@@ -745,15 +791,29 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                         fileOutput.write(buffer, 0, count)
                         total += count
 
-                        val percent = TransferProtocol.progressPercent(
-                            total,
-                            size
-                        )
+                        val finished = total >= size
 
-                        updateProgress(
-                            percent,
-                            "Receiving $uniqueName: $percent%"
-                        )
+                        if (
+                            shouldUpdateProgress(
+                                lastUpdateTime,
+                                lastUpdateBytes,
+                                total,
+                                finished
+                            )
+                        ) {
+                            val percent = TransferProtocol.progressPercent(
+                                total,
+                                size
+                            )
+
+                            updateProgress(
+                                percent,
+                                "Receiving $uniqueName: $percent%"
+                            )
+
+                            lastUpdateTime = SystemClock.elapsedRealtime()
+                            lastUpdateBytes = total
+                        }
                     }
 
                     fileOutput.fd.sync()
@@ -875,15 +935,20 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                 TransferProtocol.CONNECT_TIMEOUT_MS
             )
 
-            socket.tcpNoDelay = true
-            socket.soTimeout = TransferProtocol.SOCKET_READ_TIMEOUT_MS
+            configureTransferSocket(socket)
 
             val output = DataOutputStream(
-                BufferedOutputStream(socket.getOutputStream())
+                BufferedOutputStream(
+                    socket.getOutputStream(),
+                    TransferProtocol.BUFFER_SIZE
+                )
             )
 
             val input = DataInputStream(
-                BufferedInputStream(socket.getInputStream())
+                BufferedInputStream(
+                    socket.getInputStream(),
+                    TransferProtocol.BUFFER_SIZE
+                )
             )
 
             TransferProtocol.writeHeader(output)
@@ -900,7 +965,10 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
 
             source.use { stream ->
                 val buffer = ByteArray(TransferProtocol.BUFFER_SIZE)
+
                 var total = 0L
+                var lastUpdateTime = SystemClock.elapsedRealtime()
+                var lastUpdateBytes = 0L
 
                 while (total < size) {
                     val wanted = minOf(
@@ -921,12 +989,26 @@ class MainActivity : Activity(), WifiDirectManager.Listener {
                     output.write(buffer, 0, count)
                     total += count
 
-                    val percent = TransferProtocol.progressPercent(
-                        total,
-                        size
-                    )
+                    val finished = total >= size
 
-                    updateStatus("Sending $name: $percent%")
+                    if (
+                        shouldUpdateProgress(
+                            lastUpdateTime,
+                            lastUpdateBytes,
+                            total,
+                            finished
+                        )
+                    ) {
+                        val percent = TransferProtocol.progressPercent(
+                            total,
+                            size
+                        )
+
+                        updateStatus("Sending $name: $percent%")
+
+                        lastUpdateTime = SystemClock.elapsedRealtime()
+                        lastUpdateBytes = total
+                    }
                 }
 
                 output.flush()
