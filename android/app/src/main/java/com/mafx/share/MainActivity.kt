@@ -37,7 +37,60 @@ class MainActivity : AppCompatActivity() {
 
     private var currentPage = "Home"
     private var hotspotController: HotspotController? = null
+    private var receiveSession: ReceiveSession? = null
 
+private var scannedConnection: ConnectionQr.ConnectionInfo? = null
+
+private val qrScanLauncher =
+    registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val scanResult = com.journeyapps.barcodescanner.ScanIntentResult
+            .parseActivityResult(
+                result.resultCode,
+                result.data
+            )
+
+        val contents = scanResult.contents
+
+        if (contents.isNullOrBlank()) {
+            Toast.makeText(
+                this,
+                "QR scan cancelled.",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            try {
+                scannedConnection = ConnectionQr.parsePayload(contents)
+
+                val connection = scannedConnection!!
+
+                AlertDialog.Builder(this)
+                    .setTitle("Device Found")
+                    .setMessage(
+                        "IP address: ${connection.ipAddress}\n" +
+                            "Port: ${connection.port}\n\n" +
+                            "Connect to this device?"
+                    )
+                    .setNegativeButton("CANCEL", null)
+                    .setPositiveButton("CONTINUE") { _, _ ->
+                        Toast.makeText(
+                            this,
+                            "Device details saved. File sending is the next integration step.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    .show()
+
+            } catch (_: Exception) {
+                Toast.makeText(
+                    this,
+                    "Invalid MAFX SHARE QR code.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
     private val hotspotPermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
