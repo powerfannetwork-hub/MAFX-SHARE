@@ -142,7 +142,8 @@ internal object QrCodeHelper {
                 false
             } else {
                 part.all { it in '0'..'9' } &&
-                    part.toIntOrNull() in 0..255
+                
+               (part.toIntOrNull() ?: -1) in 0..255
             }
         }
     }
