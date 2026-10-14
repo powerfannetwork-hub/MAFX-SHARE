@@ -1226,4 +1226,3 @@ class MainActivity : AppCompatActivity(),
         super.onDestroy()
     }
 }
-```0
