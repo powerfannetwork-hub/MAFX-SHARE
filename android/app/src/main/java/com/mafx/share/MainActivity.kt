@@ -27,7 +27,6 @@ import com.journeyapps.barcodescanner.ScanIntentResult
  * and use port 8988.
  */
 class MainActivity : AppCompatActivity() {
-
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var progressText: TextView
@@ -37,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private var receiveSession: ReceiveSession? = null
     private var transferClient: TransferClient? = null
     private var selectedDestinationIp: String? = null
+    private var selectedDestinationPort: Int = TransferClient.DEFAULT_PORT
 
     private val filePicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -44,7 +44,6 @@ class MainActivity : AppCompatActivity() {
                 setStatus("File selection cancelled.")
                 return@registerForActivityResult
             }
-
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
@@ -53,22 +52,20 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
                 // Some document providers do not support persistable grants.
             }
-
             val savedIp = selectedDestinationIp
             if (savedIp.isNullOrBlank()) {
                 askForReceiverIp { ip ->
                     selectedDestinationIp = ip
-                    sendSelectedFile(ip, uri)
+                    selectedDestinationPort = TransferClient.DEFAULT_PORT
+                    sendSelectedFile(ip, uri, selectedDestinationPort)
                 }
             } else {
-                sendSelectedFile(savedIp, uri)
+                sendSelectedFile(savedIp, uri, selectedDestinationPort)
             }
         }
 
     private val qrScanLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val scanResult = ScanIntentResult.parseActivityResult(
                 result.resultCode,
                 result.data
@@ -78,10 +75,10 @@ class MainActivity : AppCompatActivity() {
                 setStatus("QR scan cancelled.")
                 return@registerForActivityResult
             }
-
             try {
                 val connection = ConnectionQr.parsePayload(contents)
                 selectedDestinationIp = connection.ipAddress
+                selectedDestinationPort = connection.port
                 Toast.makeText(
                     this,
                     "Receiver found: ${connection.ipAddress}:${connection.port}",
@@ -112,7 +109,6 @@ class MainActivity : AppCompatActivity() {
             isFillViewport = true
             addView(root)
         }
-
         val title = TextView(this).apply {
             text = "MAFX SHARE"
             textSize = 28f
@@ -126,7 +122,6 @@ class MainActivity : AppCompatActivity() {
                 dp(64)
             )
         )
-
         val subtitle = TextView(this).apply {
             text = "Share files between Android devices"
             textSize = 15f
@@ -139,7 +134,6 @@ class MainActivity : AppCompatActivity() {
                 dp(42)
             )
         )
-
         statusText = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
@@ -152,11 +146,11 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
-
         addButton(root, "RECEIVE FILES") {
             startReceiving()
         }
         addButton(root, "SEND FILES") {
+            selectedDestinationPort = TransferClient.DEFAULT_PORT
             askToChooseFile(null, TransferClient.DEFAULT_PORT)
         }
         addButton(root, "SCAN RECEIVER QR") {
@@ -171,6 +165,7 @@ class MainActivity : AppCompatActivity() {
         addButton(root, "ENTER RECEIVER IP") {
             askForReceiverIp { ip ->
                 selectedDestinationIp = ip
+                selectedDestinationPort = TransferClient.DEFAULT_PORT
                 askToChooseFile(ip, TransferClient.DEFAULT_PORT)
             }
         }
@@ -181,7 +176,6 @@ class MainActivity : AppCompatActivity() {
             receiveInfoText.text = "Receiver stopped."
             setStatus("Receiving stopped.")
         }
-
         progressBar = ProgressBar(
             this,
             null,
@@ -197,7 +191,6 @@ class MainActivity : AppCompatActivity() {
                 dp(24)
             )
         )
-
         progressText = TextView(this).apply {
             text = "Transfer progress: 0%"
             textSize = 13f
@@ -210,7 +203,6 @@ class MainActivity : AppCompatActivity() {
                 dp(36)
             )
         )
-
         receiveInfoText = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
@@ -223,7 +215,6 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
-
         receiveQrImage = ImageView(this).apply {
             contentDescription = "MAFX SHARE receiver connection QR code"
             adjustViewBounds = true
@@ -272,7 +263,6 @@ class MainActivity : AppCompatActivity() {
 
         val session = ReceiveSession(applicationContext)
         receiveSession = session
-
         session.onReady = { ip, port, payload ->
             runOnUiThread {
                 try {
@@ -288,7 +278,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-
         session.onFileReceived = { filename, size ->
             runOnUiThread {
                 setStatus("Received: $filename (${formatBytes(size)})")
@@ -299,7 +288,6 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
-
         session.onError = { message ->
             runOnUiThread {
                 setStatus("Receive error: $message")
@@ -312,14 +300,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun askToChooseFile(ip: String?, port: Int) {
         if (!ip.isNullOrBlank()) selectedDestinationIp = ip
-
+        selectedDestinationPort = port
         AlertDialog.Builder(this)
             .setTitle("Choose file")
             .setMessage(
                 if (selectedDestinationIp.isNullOrBlank()) {
                     "Choose a file. You will be asked for the receiver IP."
                 } else {
-                    "Choose a file to send to $selectedDestinationIp:$port."
+                    "Choose a file to send to $selectedDestinationIp:$selectedDestinationPort."
                 }
             )
             .setNegativeButton("CANCEL", null)
@@ -335,7 +323,6 @@ class MainActivity : AppCompatActivity() {
             setSingleLine(true)
             setText(selectedDestinationIp.orEmpty())
         }
-
         AlertDialog.Builder(this)
             .setTitle("Receiver IP address")
             .setMessage("Both devices must be connected to the same local Wi-Fi network.")
@@ -361,15 +348,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendSelectedFile(ip: String, uri: android.net.Uri) {
+    private fun sendSelectedFile(
+        ip: String,
+        uri: android.net.Uri,
+        port: Int = TransferClient.DEFAULT_PORT
+    ) {
         val client = transferClient ?: TransferClient(applicationContext).also {
             transferClient = it
         }
-
         progressBar.progress = 0
         progressText.text = "Preparing file..."
-        setStatus("Connecting to $ip:${TransferClient.DEFAULT_PORT}...")
-
+        setStatus("Connecting to $ip:$port...")
         client.onProgress = { filename, sent, total ->
             runOnUiThread {
                 val percent = if (total <= 0L) 100
@@ -380,7 +369,6 @@ class MainActivity : AppCompatActivity() {
                 setStatus("Sending file...")
             }
         }
-
         client.onCompleted = { filename, size ->
             runOnUiThread {
                 progressBar.progress = 100
@@ -393,7 +381,6 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
-
         client.onError = { message ->
             runOnUiThread {
                 setStatus("Send failed: $message")
@@ -401,7 +388,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        client.sendFile(ip, uri, TransferClient.DEFAULT_PORT)
+        client.sendFile(ip, uri, port)
     }
 
     private fun setStatus(message: String) {
