@@ -5,7 +5,10 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.atomic.AtomicBoolean
 
-class ReceiveSession(context: Context) {
+class ReceiveSession(
+    context: Context,
+    private val preferredIp: String? = null
+) {
 
     companion object {
         const val PORT = 8988
@@ -28,18 +31,30 @@ class ReceiveSession(context: Context) {
         server = receiver
 
         receiver.onStarted = { port ->
-            val ip = NetworkAddress.getLocalIPv4Address()
+
+            val ip = preferredIp
+                ?.takeIf { it.isNotBlank() }
+                ?: NetworkAddress.getLocalIPv4Address()
 
             mainHandler.post {
+
                 if (ip.isNullOrBlank()) {
                     started.set(false)
                     receiver.stop()
+
                     onError?.invoke(
-                        "Ba a gano adireshin Wi-Fi ba. Ka tabbatar an haɗa na'urorin."
+                        "Ba a gano IP na wayar karɓa ba. " +
+                            "Ka tabbatar an haɗa wayoyin ta Wi-Fi Direct."
                     )
                 } else {
-                    val qrPayload = ConnectionQr.createPayload(ip, port)
-                    onReady?.invoke(ip, port, qrPayload)
+                    val qrPayload =
+                        ConnectionQr.createPayload(ip, port)
+
+                    onReady?.invoke(
+                        ip,
+                        port,
+                        qrPayload
+                    )
                 }
             }
         }
@@ -60,7 +75,9 @@ class ReceiveSession(context: Context) {
         receiver.start()
     }
 
-    fun isRunning(): Boolean = server?.isRunning() == true
+    fun isRunning(): Boolean {
+        return server?.isRunning() == true
+    }
 
     fun stop() {
         started.set(false)
