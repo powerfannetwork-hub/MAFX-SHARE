@@ -18,6 +18,7 @@ class ReceiveSession(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val started = AtomicBoolean(false)
 
+    @Volatile
     private var server: TransferServer? = null
 
     var onReady: ((String, Int, String) -> Unit)? = null
@@ -31,12 +32,12 @@ class ReceiveSession(
         server = receiver
 
         receiver.onStarted = { port ->
-
             val ip = preferredIp
                 ?.takeIf { it.isNotBlank() }
                 ?: NetworkAddress.getLocalIPv4Address()
 
             mainHandler.post {
+                if (!started.get()) return@post
 
                 if (ip.isNullOrBlank()) {
                     started.set(false)
@@ -44,11 +45,10 @@ class ReceiveSession(
 
                     onError?.invoke(
                         "Ba a gano IP na wayar karɓa ba. " +
-                            "Ka tabbatar an haɗa wayoyin ta Wi-Fi Direct."
+                            "Ka tabbatar Wi-Fi Direct ya haɗu."
                     )
                 } else {
-                    val qrPayload =
-                        ConnectionQr.createPayload(ip, port)
+                    val qrPayload = ConnectionQr.createPayload(ip, port)
 
                     onReady?.invoke(
                         ip,
