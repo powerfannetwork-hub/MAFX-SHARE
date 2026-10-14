@@ -1,1272 +1,438 @@
 package com.mafx.share
 
-import android.Manifest
 import android.app.AlertDialog
-import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
-import android.os.Build
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.view.Gravity
-import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import com.google.zxing.integration.android.IntentIntegrator
+import com.journeyapps.barcodescanner.ScanIntentResult
 
+/**
+ * MAFX SHARE main screen.
+ *
+ * Uses the current repository transfer wire format:
+ * UTF filename, Long file size, then exactly that many file bytes.
+ * TransferClient and TransferServer must remain compatible with that format
+ * and use port 8988.
+ */
 class MainActivity : AppCompatActivity() {
 
-    private val green = Color.rgb(0, 170, 91)
-    private val blue = Color.rgb(15, 105, 245)
-    private val navy = Color.rgb(8, 35, 62)
-    private val white = Color.WHITE
-    private val pageBackground = Color.rgb(244, 248, 252)
-    private val textColor = Color.rgb(30, 43, 60)
-    private val muted = Color.rgb(115, 130, 148)
+    private lateinit var statusText: TextView
+    private lateinit var progressBar: ProgressBar
+    private lateinit var progressText: TextView
+    private lateinit var receiveQrImage: ImageView
+    private lateinit var receiveInfoText: TextView
 
-    private lateinit var root: LinearLayout
-    private lateinit var content: LinearLayout
-    private lateinit var bottomBar: LinearLayout
-
-    private var currentPage = "Home"
-    private var hotspotController: HotspotController? = null
     private var receiveSession: ReceiveSession? = null
+    private var transferClient: TransferClient? = null
+    private var selectedDestinationIp: String? = null
 
-private var scannedConnection: ConnectionQr.ConnectionInfo? = null
+    private val filePicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) {
+                setStatus("File selection cancelled.")
+                return@registerForActivityResult
+            }
 
-private val qrScanLauncher =
-    registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val scanResult = com.journeyapps.barcodescanner.ScanIntentResult
-            .parseActivityResult(
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+                // Some document providers do not support persistable grants.
+            }
+
+            val savedIp = selectedDestinationIp
+            if (savedIp.isNullOrBlank()) {
+                askForReceiverIp { ip ->
+                    selectedDestinationIp = ip
+                    sendSelectedFile(ip, uri)
+                }
+            } else {
+                sendSelectedFile(savedIp, uri)
+            }
+        }
+
+    private val qrScanLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            val scanResult = ScanIntentResult.parseActivityResult(
                 result.resultCode,
                 result.data
             )
-
-        val contents = scanResult.contents
-
-        if (contents.isNullOrBlank()) {
-            Toast.makeText(
-                this,
-                "QR scan cancelled.",
-                Toast.LENGTH_SHORT
-            ).show()
-        } else {
-            try {
-                scannedConnection = ConnectionQr.parsePayload(contents)
-
-                val connection = scannedConnection!!
-
-                AlertDialog.Builder(this)
-                    .setTitle("Device Found")
-                    .setMessage(
-                        "IP address: ${connection.ipAddress}\n" +
-                            "Port: ${connection.port}\n\n" +
-                            "Connect to this device?"
-                    )
-                    .setNegativeButton("CANCEL", null)
-                    .setPositiveButton("CONTINUE") { _, _ ->
-                        Toast.makeText(
-                            this,
-                            "Device details saved. File sending is the next integration step.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    .show()
-
-            } catch (_: Exception) {
-                Toast.makeText(
-                    this,
-                    "Invalid MAFX SHARE QR code.",
-                    Toast.LENGTH_LONG
-                ).show()
+            val contents = scanResult.contents
+            if (contents.isNullOrBlank()) {
+                setStatus("QR scan cancelled.")
+                return@registerForActivityResult
             }
-        }
-    }
-    private val hotspotPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { results ->
-            if (results.values.all { it }) {
-                startMAFXHotspot()
-            } else {
+
+            try {
+                val connection = ConnectionQr.parsePayload(contents)
+                selectedDestinationIp = connection.ipAddress
                 Toast.makeText(
                     this,
-                    "Please allow the required Wi-Fi permission.",
+                    "Receiver found: ${connection.ipAddress}:${connection.port}",
                     Toast.LENGTH_LONG
                 ).show()
+                askToChooseFile(connection.ipAddress, connection.port)
+            } catch (e: Exception) {
+                showError(e.message ?: "Invalid MAFX SHARE QR code.")
             }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        title = "MAFX SHARE"
+        buildScreen()
+        transferClient = TransferClient(applicationContext)
+        setStatus("Ready. Connect both devices to the same Wi-Fi network.")
+    }
 
-        window.statusBarColor = navy
-        window.navigationBarColor = white
-
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-
-        root = LinearLayout(this).apply {
+    private fun buildScreen() {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(white)
-            clipToPadding = false
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(20), dp(20), dp(20), dp(20))
         }
 
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(pageBackground)
-        }
-
-        bottomBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(white)
-            elevation = dp(10).toFloat()
-        }
-
-        root.addView(
-            content,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        root.addView(
-            bottomBar,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(66)
-            )
-        )
-
-        setContentView(root)
-
-        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or
-                    WindowInsetsCompat.Type.displayCutout()
-            )
-
-            view.setPadding(
-                bars.left,
-                bars.top,
-                bars.right,
-                bars.bottom
-            )
-
-            insets
-        }
-
-        ViewCompat.requestApplyInsets(root)
-        showPage("Home")
-    }
-
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
-
-    private fun rounded(
-        color: Int,
-        radius: Int = 18,
-        strokeColor: Int? = null
-    ): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
-
-            if (strokeColor != null) {
-                setStroke(dp(1), strokeColor)
-            }
-        }
-    }
-
-    private fun label(
-        value: String,
-        size: Float = 14f,
-        color: Int = textColor,
-        bold: Boolean = false
-    ): TextView {
-        return TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-
-            if (bold) {
-                setTypeface(null, Typeface.BOLD)
-            }
-
-            gravity = Gravity.CENTER_VERTICAL
-        }
-    }
-
-    private fun button(
-        title: String,
-        color: Int,
-        onClick: () -> Unit
-    ): Button {
-        return Button(this).apply {
-            text = title
-            textSize = 14f
-            isAllCaps = false
-            setTextColor(white)
-            background = rounded(color, 16)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-
-            setOnClickListener {
-                onClick()
-            }
-        }
-    }
-
-    private fun card(
-        parent: LinearLayout,
-        padding: Int = 16
-    ): LinearLayout {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                dp(padding),
-                dp(padding),
-                dp(padding),
-                dp(padding)
-            )
-            background = rounded(white, 20)
-            elevation = dp(2).toFloat()
-        }
-
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(dp(16), dp(7), dp(16), dp(7))
-        }
-
-        parent.addView(box, params)
-        return box
-    }
-
-    private fun space(
-        parent: LinearLayout,
-        height: Int = 12
-    ) {
-        parent.addView(
-            View(this),
-            LinearLayout.LayoutParams(1, dp(height))
-        )
-    }
-
-    private fun heading(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String? = null
-    ) {
-        parent.addView(
-            label(title, 23f, textColor, true),
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(dp(18), dp(18), dp(18), dp(4))
-            }
-        )
-
-        if (subtitle != null) {
-            parent.addView(
-                label(subtitle, 13f, muted),
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(dp(18), 0, dp(18), dp(12))
-                }
-            )
-        }
-    }
-
-    private fun showPage(page: String) {
-        currentPage = page
-        content.removeAllViews()
-        content.setBackgroundColor(pageBackground)
-
-        when (page) {
-            "Home" -> homePage()
-            "Send" -> sendPage()
-            "Receive" -> receivePage()
-            "Connect" -> connectPage()
-            "Nearby Devices" -> nearbyPage()
-            "Transfers" -> transfersPage()
-            "History" -> historyPage()
-            "Settings" -> settingsPage()
-            "Photos", "Videos", "Music", "Apps", "Files" ->
-                categoryPage(page)
-            else -> homePage()
-        }
-
-        buildBottomBar()
-    }
-
-    private fun scrollPage(): LinearLayout {
         val scroll = ScrollView(this).apply {
             isFillViewport = true
-            clipToPadding = false
+            addView(root)
         }
 
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(16))
-        }
-
-        scroll.addView(page)
-
-        content.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        return page
-    }
-
-    private fun homePage() {
-        val page = scrollPage()
-
-        val banner = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val title = TextView(this).apply {
+            text = "MAFX SHARE"
+            textSize = 28f
+            setTypeface(null, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(dp(20), dp(28), dp(20), dp(28))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(navy, Color.rgb(0, 81, 145), blue)
-            ).apply {
-                cornerRadii = floatArrayOf(
-                    0f, 0f, 0f, 0f,
-                    dp(25).toFloat(), dp(25).toFloat(),
-                    dp(25).toFloat(), dp(25).toFloat()
-                )
-            }
         }
-
-        banner.addView(
-            label("MΛFX", 38f, white, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        banner.addView(
-            label("MAFX SHARE", 27f, white, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        banner.addView(
-            label("Fast  •  Secure  •  Unlimited", 14f, white).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        page.addView(
-            banner,
+        root.addView(
+            title,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(205)
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(64)
             )
         )
 
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), dp(12), dp(12), dp(4))
-        }
-
-        actions.addView(
-            actionCard(
-                "➤",
-                "SEND",
-                "Send files to another device",
-                green
-            ) {
-                showPage("Send")
-            },
-            LinearLayout.LayoutParams(0, dp(164), 1f).apply {
-                setMargins(dp(4), 0, dp(5), 0)
-            }
-        )
-
-        actions.addView(
-            actionCard(
-                "⬇",
-                "RECEIVE",
-                "Receive files from another device",
-                blue
-            ) {
-                showPage("Receive")
-            },
-            LinearLayout.LayoutParams(0, dp(164), 1f).apply {
-                setMargins(dp(5), 0, dp(4), 0)
-            }
-        )
-
-        page.addView(actions)
-
-        heading(page, "Quick Access", "Choose a file category")
-
-        val categories = listOf(
-            Triple("▧", "Photos", green),
-            Triple("▣", "Videos", blue),
-            Triple("♫", "Music", Color.rgb(145, 70, 230)),
-            Triple("▦", "Apps", Color.rgb(240, 125, 30)),
-            Triple("▤", "Files", Color.rgb(0, 160, 155)),
-            Triple("•••", "More", navy)
-        )
-
-        for (row in categories.chunked(3)) {
-            val line = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-            }
-
-            for ((icon, name, color) in row) {
-                val item = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.CENTER
-                    setPadding(dp(4), dp(8), dp(4), dp(8))
-
-                    setOnClickListener {
-                        if (name == "More") {
-                            showPage("Settings")
-                        } else {
-                            showPage(name)
-                        }
-                    }
-                }
-
-                val iconView = TextView(this).apply {
-                    text = icon
-                    textSize = 25f
-                    setTextColor(white)
-                    gravity = Gravity.CENTER
-                    background = rounded(color, 14)
-                }
-
-                item.addView(
-                    iconView,
-                    LinearLayout.LayoutParams(dp(52), dp(48))
-                )
-
-                item.addView(
-                    label(name, 12f, textColor, true).apply {
-                        gravity = Gravity.CENTER
-                    }
-                )
-
-                line.addView(
-                    item,
-                    LinearLayout.LayoutParams(0, dp(85), 1f)
-                )
-            }
-
-            page.addView(
-                line,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(dp(12), 0, dp(12), 0)
-                }
-            )
-        }
-
-        val status = card(page)
-        status.addView(label("DEVICE STATUS", 12f, muted, true))
-        space(status, 8)
-        status.addView(
-            label("●  MAFX SHARE is ready", 15f, green, true)
-        )
-        space(status, 4)
-        status.addView(
-            label("Connect two devices to begin sharing.", 13f, muted)
-        )
-    }
-
-    private fun actionCard(
-        icon: String,
-        title: String,
-        subtitle: String,
-        color: Int,
-        click: () -> Unit
-    ): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val subtitle = TextView(this).apply {
+            text = "Share files between Android devices"
+            textSize = 15f
             gravity = Gravity.CENTER
-            setPadding(dp(8), dp(10), dp(8), dp(10))
-            background = rounded(color, 22)
-
-            setOnClickListener { click() }
-
-            addView(
-                label(icon, 34f, white, true).apply {
-                    gravity = Gravity.CENTER
-                }
-            )
-
-            addView(
-                label(title, 20f, white, true).apply {
-                    gravity = Gravity.CENTER
-                }
-            )
-
-            space(this, 6)
-
-            addView(
-                label(subtitle, 11f, white).apply {
-                    gravity = Gravity.CENTER
-                    textAlignment = View.TEXT_ALIGNMENT_CENTER
-                }
-            )
         }
-    }
-
-    private fun sendPage() {
-        val page = scrollPage()
-
-        heading(page, "Send Files", "Choose what you want to share")
-
-        val categories = listOf(
-            "▧" to "Photos",
-            "▣" to "Videos",
-            "♫" to "Music",
-            "▦" to "Apps",
-            "▤" to "Files"
+        root.addView(
+            subtitle,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(42)
+            )
         )
 
-        for ((icon, name) in categories) {
-            val box = card(page, 14)
-            box.orientation = LinearLayout.HORIZONTAL
-            box.gravity = Gravity.CENTER_VERTICAL
-
-            box.addView(
-                label(icon, 26f, green, true),
-                LinearLayout.LayoutParams(dp(45), dp(42))
+        statusText = TextView(this).apply {
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+        }
+        root.addView(
+            statusText,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
+        )
 
-            box.addView(
-                label(name, 16f, textColor, true),
-                LinearLayout.LayoutParams(0, dp(42), 1f)
-            )
-
-            box.addView(label("›", 27f, muted))
-
-            box.setOnClickListener {
-                showPage(name)
+        addButton(root, "RECEIVE FILES") {
+            startReceiving()
+        }
+        addButton(root, "SEND FILES") {
+            askToChooseFile(null, TransferClient.DEFAULT_PORT)
+        }
+        addButton(root, "SCAN RECEIVER QR") {
+            val intent = IntentIntegrator(this)
+                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("Scan the MAFX SHARE receiver QR code")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false)
+                .createScanIntent()
+            qrScanLauncher.launch(intent)
+        }
+        addButton(root, "ENTER RECEIVER IP") {
+            askForReceiverIp { ip ->
+                selectedDestinationIp = ip
+                askToChooseFile(ip, TransferClient.DEFAULT_PORT)
             }
         }
+        addButton(root, "STOP RECEIVING") {
+            receiveSession?.stop()
+            receiveSession = null
+            receiveQrImage.setImageDrawable(null)
+            receiveInfoText.text = "Receiver stopped."
+            setStatus("Receiving stopped.")
+        }
 
-        val info = card(page)
-        info.addView(label("Selected files", 17f, textColor, true))
-        space(info, 6)
-        info.addView(label("Choose a category to continue.", 13f, muted))
-        space(info, 12)
-
-        info.addView(
-            button("NEXT  →", green) {
-                showPage("Connect")
-            },
+        progressBar = ProgressBar(
+            this,
+            null,
+            android.R.attr.progressBarStyleHorizontal
+        ).apply {
+            max = 100
+            progress = 0
+        }
+        root.addView(
+            progressBar,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(24)
             )
+        )
+
+        progressText = TextView(this).apply {
+            text = "Transfer progress: 0%"
+            textSize = 13f
+            gravity = Gravity.CENTER
+        }
+        root.addView(
+            progressText,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(36)
+            )
+        )
+
+        receiveInfoText = TextView(this).apply {
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(12), dp(8), dp(8))
+        }
+        root.addView(
+            receiveInfoText,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        receiveQrImage = ImageView(this).apply {
+            contentDescription = "MAFX SHARE receiver connection QR code"
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        root.addView(
+            receiveQrImage,
+            LinearLayout.LayoutParams(
+                dp(240),
+                dp(240)
+            ).apply {
+                gravity = Gravity.CENTER
+            }
+        )
+
+        setContentView(scroll)
+    }
+
+    private fun addButton(parent: LinearLayout, text: String, action: () -> Unit) {
+        val button = Button(this).apply {
+            this.text = text
+            isAllCaps = false
+            setOnClickListener { action() }
+        }
+        parent.addView(
+            button,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                topMargin = dp(7)
+                bottomMargin = dp(7)
+            }
         )
     }
 
-    private fun categoryPage(category: String) {
-        val page = scrollPage()
+    private fun startReceiving() {
+        if (receiveSession?.isRunning() == true) {
+            setStatus("Receiver is already running.")
+            return
+        }
 
-        heading(page, category, "Select files to prepare for sharing")
+        receiveQrImage.setImageDrawable(null)
+        receiveInfoText.text = "Starting receiver..."
+        setStatus("Starting receiver on port ${ReceiveSession.PORT}.")
 
-        val box = card(page)
-        box.gravity = Gravity.CENTER
+        val session = ReceiveSession(applicationContext)
+        receiveSession = session
 
-        box.addView(
-            label("▤", 55f, blue, true).apply {
-                gravity = Gravity.CENTER
+        session.onReady = { ip, port, payload ->
+            runOnUiThread {
+                try {
+                    val bitmap: Bitmap = ConnectionQr.generateBitmap(payload)
+                    receiveQrImage.setImageBitmap(bitmap)
+                    receiveInfoText.text =
+                        "Receiver is ready.\nIP: $ip\nPort: $port\n" +
+                        "Connect the sender to the same Wi-Fi network, then scan this QR."
+                    setStatus("Waiting for incoming files...")
+                } catch (e: Exception) {
+                    setStatus("Receiver started, but QR generation failed.")
+                    showError(e.message ?: "Could not generate connection QR.")
+                }
             }
-        )
+        }
 
-        space(box, 12)
-
-        box.addView(
-            label("Choose $category", 18f, textColor, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(box, 8)
-
-        box.addView(
-            label(
-                "The file picker and transfer engine must be connected to select and send real files.",
-                13f,
-                muted
-            ).apply {
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-            }
-        )
-
-        space(box, 18)
-
-        box.addView(
-            button("CONTINUE", green) {
-                showPage("Connect")
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(50)
-            )
-        )
-    }
-
-    private fun receivePage() {
-        val page = scrollPage()
-
-        heading(page, "Receiving Files", "Get ready to receive files")
-
-        val box = card(page)
-        box.gravity = Gravity.CENTER
-
-        space(box, 10)
-
-        box.addView(
-            label("📱      )))      📱", 28f, blue, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(box, 18)
-
-        box.addView(
-            label("Waiting for sender...", 20f, textColor, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(box, 8)
-
-        box.addView(
-            label(
-                "Start the connection method on both devices. Starting a hotspot alone does not start file receiving.",
-                13f,
-                muted
-            ).apply {
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-            }
-        )
-
-        space(box, 22)
-
-        box.addView(
-            button("CONNECT TO DEVICE", blue) {
-                showPage("Connect")
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        val note = card(page)
-        note.addView(label("Connection status", 15f, textColor, true))
-        space(note, 8)
-        note.addView(label("Not connected", 14f, muted))
-    }
-
-    private fun connectPage() {
-        val page = scrollPage()
-
-        heading(
-            page,
-            "Connect to Device",
-            "Choose a connection method"
-        )
-
-        val hero = card(page)
-
-        hero.gravity = Gravity.CENTER
-        hero.setPadding(dp(20), dp(28), dp(20), dp(28))
-        hero.background = rounded(navy, 24)
-
-        hero.addView(
-            label("◎", 70f, Color.rgb(0, 220, 190), true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(hero, 12)
-
-        hero.addView(
-            label("Connect your devices", 20f, white, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(hero, 8)
-
-        hero.addView(
-            label(
-                "Create a temporary Wi-Fi hotspot or explore other connection options.",
-                13f,
-                white
-            ).apply {
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-            }
-        )
-
-        // Hotspot controls
-        val hotspotCard = card(page)
-
-        hotspotCard.addView(
-            label("Wi-Fi Hotspot", 18f, textColor, true)
-        )
-
-        space(hotspotCard, 6)
-
-        hotspotCard.addView(
-            label(
-                "Create a local Wi-Fi network for the other device to join.",
-                13f,
-                muted
-            )
-        )
-
-        space(hotspotCard, 14)
-
-        hotspotCard.addView(
-            button("START HOTSPOT", green) {
-                requestHotspotPermission()
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        space(hotspotCard, 8)
-
-        hotspotCard.addView(
-            button("STOP HOTSPOT", navy) {
-                hotspotController?.stopHotspot()
+        session.onFileReceived = { filename, size ->
+            runOnUiThread {
+                setStatus("Received: $filename (${formatBytes(size)})")
                 Toast.makeText(
                     this,
-                    "Hotspot stop requested",
-                    Toast.LENGTH_SHORT
-                ).show()
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48)
-            )
-        )
-
-        // Other connection methods
-        val methods = listOf(
-            Triple("◉", "Wi-Fi Direct", "Find nearby devices"),
-            Triple("▦", "Scan QR Code", "Scan a compatible connection QR")
-        )
-
-        for ((icon, title, subtitle) in methods) {
-            val box = card(page, 14)
-
-            box.orientation = LinearLayout.HORIZONTAL
-            box.gravity = Gravity.CENTER_VERTICAL
-
-            box.addView(
-                label(icon, 25f, green, true),
-                LinearLayout.LayoutParams(dp(42), dp(48))
-            )
-
-            val texts = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-
-            texts.addView(label(title, 15f, textColor, true))
-            texts.addView(label(subtitle, 11f, muted))
-
-            box.addView(
-                texts,
-                LinearLayout.LayoutParams(0, dp(48), 1f)
-            )
-
-            box.addView(label("›", 25f, muted))
-
-            box.setOnClickListener {
-                when (title) {
-                    "Wi-Fi Direct" -> showPage("Nearby Devices")
-
-                    "Scan QR Code" -> Toast.makeText(
-                        this,
-                        "QR scanner is not connected yet.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-
-        page.addView(
-            button("SEARCH NEARBY DEVICES", blue) {
-                showPage("Nearby Devices")
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(54)
-            ).apply {
-                setMargins(dp(16), dp(8), dp(16), dp(8))
-            }
-        )
-    }
-
-    private fun requestHotspotPermission() {
-        val permissions = when {
-            Build.VERSION.SDK_INT >= 33 -> arrayOf(
-                Manifest.permission.NEARBY_WIFI_DEVICES
-            )
-
-            else -> arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
-        }
-
-        val missing = permissions.filter {
-            ContextCompat.checkSelfPermission(
-                this,
-                it
-            ) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missing.isEmpty()) {
-            startMAFXHotspot()
-        } else {
-            hotspotPermissionLauncher.launch(missing.toTypedArray())
-        }
-    }
-
-    private fun startMAFXHotspot() {
-        if (hotspotController == null) {
-            hotspotController = HotspotController(this)
-        }
-
-        val controller = hotspotController ?: return
-
-        controller.onHotspotReady = { ssid, password ->
-            runOnUiThread {
-                AlertDialog.Builder(this)
-                    .setTitle("MAFX SHARE Hotspot Ready")
-                    .setMessage(
-                        "Wi-Fi name: $ssid\n\n" +
-                            "Password: $password\n\n" +
-                            "Connect the other device to this Wi-Fi network."
-                    )
-                    .setPositiveButton("OK", null)
-                    .setNegativeButton("STOP HOTSPOT") { _, _ ->
-                        controller.stopHotspot()
-                    }
-                    .show()
-            }
-        }
-
-        controller.onError = { message ->
-            runOnUiThread {
-                Toast.makeText(
-                    this,
-                    message,
+                    "File received: $filename",
                     Toast.LENGTH_LONG
                 ).show()
             }
         }
 
-        controller.onHotspotStopped = {
+        session.onError = { message ->
             runOnUiThread {
+                setStatus("Receive error: $message")
+                showError(message)
+            }
+        }
+
+        session.start()
+    }
+
+    private fun askToChooseFile(ip: String?, port: Int) {
+        if (!ip.isNullOrBlank()) selectedDestinationIp = ip
+
+        AlertDialog.Builder(this)
+            .setTitle("Choose file")
+            .setMessage(
+                if (selectedDestinationIp.isNullOrBlank()) {
+                    "Choose a file. You will be asked for the receiver IP."
+                } else {
+                    "Choose a file to send to $selectedDestinationIp:$port."
+                }
+            )
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("CHOOSE FILE") { _, _ ->
+                filePicker.launch(arrayOf("*/*"))
+            }
+            .show()
+    }
+
+    private fun askForReceiverIp(onIpReady: (String) -> Unit) {
+        val input = EditText(this).apply {
+            hint = "Example: 192.168.49.1"
+            setSingleLine(true)
+            setText(selectedDestinationIp.orEmpty())
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Receiver IP address")
+            .setMessage("Both devices must be connected to the same local Wi-Fi network.")
+            .setView(input)
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("CONTINUE") { _, _ ->
+                val ip = input.text.toString().trim()
+                if (!isValidIpText(ip)) {
+                    showError("Enter a valid IPv4 address.")
+                } else {
+                    onIpReady(ip)
+                }
+            }
+            .show()
+    }
+
+    private fun isValidIpText(ip: String): Boolean {
+        val parts = ip.split(".")
+        if (parts.size != 4) return false
+        return parts.all { part ->
+            val number = part.toIntOrNull()
+            number != null && number in 0..255 && part.isNotBlank()
+        }
+    }
+
+    private fun sendSelectedFile(ip: String, uri: android.net.Uri) {
+        val client = transferClient ?: TransferClient(applicationContext).also {
+            transferClient = it
+        }
+
+        progressBar.progress = 0
+        progressText.text = "Preparing file..."
+        setStatus("Connecting to $ip:${TransferClient.DEFAULT_PORT}...")
+
+        client.onProgress = { filename, sent, total ->
+            runOnUiThread {
+                val percent = if (total <= 0L) 100
+                    else ((sent.toDouble() / total.toDouble()) * 100).toInt().coerceIn(0, 100)
+                progressBar.progress = percent
+                progressText.text =
+                    "$filename: $percent% (${formatBytes(sent)} / ${formatBytes(total)})"
+                setStatus("Sending file...")
+            }
+        }
+
+        client.onCompleted = { filename, size ->
+            runOnUiThread {
+                progressBar.progress = 100
+                progressText.text = "Transfer finished: 100%"
+                setStatus("Sent: $filename (${formatBytes(size)}).")
                 Toast.makeText(
                     this,
-                    "Hotspot stopped",
-                    Toast.LENGTH_SHORT
+                    "File sent: $filename",
+                    Toast.LENGTH_LONG
                 ).show()
             }
         }
 
-        controller.startHotspot()
-    }
-
-    private fun nearbyPage() {
-        val page = scrollPage()
-
-        heading(
-            page,
-            "Nearby Devices",
-            "Available connection options"
-        )
-
-        val info = card(page)
-
-        info.addView(
-            label("Device discovery", 17f, textColor, true)
-        )
-
-        space(info, 8)
-
-        info.addView(
-            label(
-                "Nearby device discovery is not yet connected to the Wi-Fi Direct manager.",
-                13f,
-                muted
-            )
-        )
-
-        val localDevice = card(page)
-
-        localDevice.orientation = LinearLayout.HORIZONTAL
-        localDevice.gravity = Gravity.CENTER_VERTICAL
-
-        localDevice.addView(
-            label("▣", 30f, green, true),
-            LinearLayout.LayoutParams(dp(50), dp(55))
-        )
-
-        val deviceInfo = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        client.onError = { message ->
+            runOnUiThread {
+                setStatus("Send failed: $message")
+                showError(message)
+            }
         }
 
-        deviceInfo.addView(
-            label(
-                Build.MODEL ?: "Android Device",
-                15f,
-                textColor,
-                true
-            )
-        )
-
-        deviceInfo.addView(label("This device", 12f, green))
-
-        localDevice.addView(
-            deviceInfo,
-            LinearLayout.LayoutParams(0, dp(55), 1f)
-        )
-
-        localDevice.addView(label("✓", 22f, green, true))
-
-        page.addView(
-            button("BACK TO CONNECTION OPTIONS", blue) {
-                showPage("Connect")
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            ).apply {
-                setMargins(dp(16), dp(8), dp(16), dp(8))
-            }
-        )
+        client.sendFile(ip, uri, TransferClient.DEFAULT_PORT)
     }
 
-    private fun transfersPage() {
-        val page = scrollPage()
-
-        heading(page, "Transfers", "Monitor your file transfers")
-
-        val tabs = card(page)
-        tabs.orientation = LinearLayout.HORIZONTAL
-
-        tabs.addView(
-            label("ONGOING", 14f, green, true),
-            LinearLayout.LayoutParams(0, dp(42), 1f)
-        )
-
-        tabs.addView(
-            label("COMPLETED", 14f, muted, true),
-            LinearLayout.LayoutParams(0, dp(42), 1f)
-        )
-
-        val empty = card(page)
-        empty.gravity = Gravity.CENTER
-
-        space(empty, 25)
-
-        empty.addView(
-            label("⇄", 52f, blue, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(empty, 12)
-
-        empty.addView(
-            label("No active transfers", 19f, textColor, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(empty, 6)
-
-        empty.addView(
-            label(
-                "Your transfer progress will appear here when the transfer engine is connected.",
-                13f,
-                muted
-            ).apply {
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-            }
-        )
-
-        space(empty, 25)
-
-        page.addView(
-            button("SEND FILES", green) {
-                showPage("Send")
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            ).apply {
-                setMargins(dp(16), dp(8), dp(16), dp(8))
-            }
-        )
+    private fun setStatus(message: String) {
+        if (::statusText.isInitialized) statusText.text = message
     }
 
-    private fun historyPage() {
-        val page = scrollPage()
-
-        heading(
-            page,
-            "History",
-            "Previously sent and received files"
-        )
-
-        val box = card(page)
-        box.gravity = Gravity.CENTER
-
-        space(box, 24)
-
-        box.addView(
-            label("◷", 52f, blue, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(box, 12)
-
-        box.addView(
-            label("No transfer history", 18f, textColor, true).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        space(box, 8)
-
-        box.addView(
-            label(
-                "Completed transfers will appear here when history tracking is connected.",
-                13f,
-                muted
-            ).apply {
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-            }
-        )
-
-        space(box, 24)
-    }
-
-    private fun settingsPage() {
-        val page = scrollPage()
-
-        heading(page, "Settings", "Customize your experience")
-
-        val device = card(page)
-
-        device.orientation = LinearLayout.HORIZONTAL
-        device.gravity = Gravity.CENTER_VERTICAL
-
-        device.addView(
-            label("MΛ", 35f, green, true),
-            LinearLayout.LayoutParams(dp(55), dp(55))
-        )
-
-        val deviceText = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        deviceText.addView(
-            label("MAFX SHARE", 17f, textColor, true)
-        )
-
-        deviceText.addView(
-            label(Build.MODEL ?: "Android Device", 12f, muted)
-        )
-
-        device.addView(deviceText)
-
-        heading(page, "Network & Connection")
-
-        settingsRow(page, "▤", "Wi-Fi Direct", "Connection options")
-        settingsRow(page, "◉", "Hotspot", "Connection options")
-        settingsRow(page, "⌁", "Network", "Network preferences")
-
-        heading(page, "File Transfer")
-
-        settingsRow(page, "↗", "Transfer Speed", "High-speed transfer")
-        settingsRow(page, "◷", "Auto Resume", "Transfer preferences")
-
-        heading(page, "App Settings")
-
-        settingsRow(page, "◎", "Language", "English")
-        settingsRow(page, "◐", "Theme", "System default")
-        settingsRow(page, "ⓘ", "About MAFX SHARE", "Version 1.0.0")
-    }
-
-    private fun settingsRow(
-        page: LinearLayout,
-        icon: String,
-        title: String,
-        subtitle: String
-    ) {
-        val box = card(page, 13)
-
-        box.orientation = LinearLayout.HORIZONTAL
-        box.gravity = Gravity.CENTER_VERTICAL
-
-        box.addView(
-            label(icon, 24f, blue, true),
-            LinearLayout.LayoutParams(dp(42), dp(48))
-        )
-
-        val texts = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        texts.addView(label(title, 14f, textColor, true))
-        texts.addView(label(subtitle, 12f, muted))
-
-        box.addView(
-            texts,
-            LinearLayout.LayoutParams(0, dp(48), 1f)
-        )
-
-        box.addView(label("›", 24f, muted))
-
-        box.setOnClickListener {
-            when (title) {
-                "Hotspot" -> showPage("Connect")
-                "Wi-Fi Direct" -> showPage("Nearby Devices")
-            }
+    private fun showError(message: String) {
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle("MAFX SHARE")
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show()
         }
     }
 
-    private fun buildBottomBar() {
-        bottomBar.removeAllViews()
-
-        bottomBar.setPadding(dp(6), dp(5), dp(6), dp(5))
-        bottomBar.elevation = dp(12).toFloat()
-
-        val items = listOf(
-            Triple("⌂", "Home", "Home"),
-            Triple("⇄", "Transfers", "Transfers"),
-            Triple("◷", "History", "History"),
-            Triple("⚙", "Settings", "Settings")
-        )
-
-        for ((icon, title, destination) in items) {
-            val selected = currentPage == destination
-
-            val item = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(dp(2), dp(5), dp(2), dp(5))
-
-                background = if (selected) {
-                    rounded(Color.rgb(226, 248, 237), 16)
-                } else {
-                    rounded(white, 16)
-                }
-
-                isClickable = true
-                isFocusable = true
-                contentDescription = title
-
-                setOnClickListener {
-                    if (currentPage != destination) {
-                        showPage(destination)
-                    }
-                }
-            }
-
-            item.addView(
-                label(
-                    icon,
-                    25f,
-                    if (selected) Color.rgb(0, 125, 67)
-                    else Color.rgb(55, 69, 86),
-                    true
-                ).apply {
-                    gravity = Gravity.CENTER
-                    includeFontPadding = false
-                },
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(30)
-                )
-            )
-
-            item.addView(
-                label(
-                    title,
-                    11f,
-                    if (selected) Color.rgb(0, 125, 67)
-                    else Color.rgb(55, 69, 86),
-                    selected
-                ).apply {
-                    gravity = Gravity.CENTER
-                    includeFontPadding = false
-                },
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(20)
-                )
-            )
-
-            bottomBar.addView(
-                item,
-                LinearLayout.LayoutParams(0, dp(56), 1f).apply {
-                    setMargins(dp(3), 0, dp(3), 0)
-                }
-            )
-        }
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024.0) return String.format("%.1f KB", kb)
+        val mb = kb / 1024.0
+        if (mb < 1024.0) return String.format("%.1f MB", mb)
+        return String.format("%.2f GB", mb / 1024.0)
     }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
+        receiveSession?.stop()
+        transferClient?.shutdown()
         super.onDestroy()
-        // Keep the hotspot running unless the user explicitly stops it.
-        // This avoids unexpectedly disconnecting a connected device.
-    }
-
-    @Deprecated("Deprecated in Android")
-    override fun onBackPressed() {
-        if (currentPage != "Home") {
-            showPage("Home")
-        } else {
-            super.onBackPressed()
-        }
     }
 }
