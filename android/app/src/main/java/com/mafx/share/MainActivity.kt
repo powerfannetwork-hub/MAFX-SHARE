@@ -36,7 +36,13 @@ class MainActivity : AppCompatActivity(),
     private lateinit var receiveInfoText: TextView
 
     private lateinit var wifiDirectManager: WifiDirectManager
+    private lateinit var hotspotController: HotspotController
 
+private var hotspotFallbackAttempted = false
+private var usingHotspotFallback = false
+
+private var hotspotSsid: String? = null
+private var hotspotPassword: String? = null
     private var receiveSession: ReceiveSession? = null
     private var transferClient: TransferClient? = null
 
