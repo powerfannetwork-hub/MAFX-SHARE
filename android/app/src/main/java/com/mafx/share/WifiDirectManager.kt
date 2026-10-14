@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.NetworkInfo
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
@@ -17,39 +16,66 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 
 /**
- * Manages Wi-Fi Direct discovery and connections for MAFX SHARE.
+ * Wi-Fi Direct manager for MAFX SHARE.
  *
- * This class manages peer discovery and connection only.
- * File transfer must be started separately after a connection succeeds.
+ * Responsibilities:
+ * - Discover nearby Wi-Fi Direct devices.
+ * - Request a connection to a selected device.
+ * - Create a Wi-Fi Direct group for receiving.
+ * - Report connection information to the Activity.
+ *
+ * This class does not replace TransferClient or TransferServer.
  */
-internal class WifiDirectManager(
-    private val context: Context,
+class WifiDirectManager(
+    context: Context,
     private val listener: Listener
 ) {
+
     interface Listener {
-        fun onWifiDirectStateChanged(enabled: Boolean)
+        fun onWifiP2pStateChanged(enabled: Boolean)
+
         fun onPeersAvailable(peers: List<WifiP2pDevice>)
-        fun onConnectionChanged(info: WifiP2pInfo?)
+
+        fun onConnectionInfoAvailable(info: WifiP2pInfo)
+
+        fun onDisconnected()
+
         fun onError(message: String)
     }
 
-    private val manager: WifiP2pManager? =
-        context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+    private val appContext = context.applicationContext
 
-    private var channel: WifiP2pManager.Channel? = null
-    private var receiverRegistered = false
-    private var discoveryRunning = false
+    private val manager: WifiP2pManager? =
+        appContext.getSystemService(Context.WIFI_P2P_SERVICE)
+            as? WifiP2pManager
+
+    private val channel: WifiP2pManager.Channel? =
+        manager?.initialize(
+            appContext,
+            Looper.getMainLooper()
+        ) {
+            listener.onError(
+                "Wi-Fi Direct channel was disconnected. Try again."
+            )
+        }
+
+    private var registered = false
 
     private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
+
+        override fun onReceive(
+            context: Context?,
+            intent: Intent?
+        ) {
+            when (intent?.action) {
+
                 WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
                     val state = intent.getIntExtra(
                         WifiP2pManager.EXTRA_WIFI_STATE,
-                        -1
+                        WifiP2pManager.WIFI_P2P_STATE_DISABLED
                     )
 
-                    listener.onWifiDirectStateChanged(
+                    listener.onWifiP2pStateChanged(
                         state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
                     )
                 }
@@ -59,230 +85,44 @@ internal class WifiDirectManager(
                 }
 
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-                    handleConnectionChanged(intent)
+                    requestConnectionInfo()
                 }
             }
         }
     }
 
-    private val intentFilter = IntentFilter().apply {
-        addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
-        addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
-        addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
-    }
+    companion object {
 
-    fun initialize() {
-        if (!hasRequiredPermissions()) {
-            listener.onError(
-                "Wi-Fi Direct permission is missing. Grant the required permission first."
-            )
-            return
-        }
-
-        val wifiManager = manager
-        if (wifiManager == null) {
-            listener.onError("Wi-Fi Direct is not supported on this device.")
-            return
-        }
-
-        if (channel != null) {
-            registerReceiverIfNeeded()
-            return
-        }
-
-        channel = wifiManager.initialize(
-            context,
-            Looper.getMainLooper()
-        ) {
-            channel = null
-            discoveryRunning = false
-            listener.onError(
-                "Wi-Fi Direct connection channel was lost. Please initialize it again."
-            )
-        }
-
-        if (channel == null) {
-            listener.onError("Unable to initialize Wi-Fi Direct.")
-            return
-        }
-
-        registerReceiverIfNeeded()
-    }
-
-    fun discoverPeers() {
-        if (!ready()) return
-
-        manager?.discoverPeers(
-            channel,
-            object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    discoveryRunning = true
-                }
-
-                override fun onFailure(reason: Int) {
-                    discoveryRunning = false
-                    listener.onError(
-                        "Device discovery failed: ${failureReason(reason)}"
-                    )
-                }
-            }
-        )
-    }
-
-    fun requestPeers() {
-        if (!ready()) return
-
-        manager?.requestPeers(
-            channel
-        ) { devices: WifiP2pDeviceList ->
-            listener.onPeersAvailable(devices.deviceList.toList())
-        }
-    }
-
-    fun connect(device: WifiP2pDevice) {
-        if (!ready()) return
-
-        val config = WifiP2pConfig().apply {
-            deviceAddress = device.deviceAddress
-        }
-
-        manager?.connect(
-            channel,
-            config,
-            object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    // Connection negotiation has started.
-                    // Actual connection status arrives via the broadcast receiver.
-                }
-
-                override fun onFailure(reason: Int) {
-                    listener.onError(
-                        "Unable to connect to ${device.deviceName}: " +
-                            failureReason(reason)
-                    )
-                }
-            }
-        )
-    }
-
-    fun cancelDiscovery() {
-        if (!ready()) return
-
-        manager?.stopPeerDiscovery(
-            channel,
-            object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    discoveryRunning = false
-                }
-
-                override fun onFailure(reason: Int) {
-                    discoveryRunning = false
-                }
-            }
-        )
-    }
-
-    fun disconnect() {
-        if (!ready()) return
-
-        manager?.cancelConnect(
-            channel,
-            object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    // The connection-change broadcast reports the final state.
-                }
-
-                override fun onFailure(reason: Int) {
-                    listener.onError(
-                        "Unable to cancel the Wi-Fi Direct connection: " +
-                            failureReason(reason)
-                    )
-                }
-            }
-        )
-    }
-
-    fun release() {
-        if (receiverRegistered) {
-            try {
-                context.unregisterReceiver(receiver)
-            } catch (_: IllegalArgumentException) {
-                // The receiver was already unregistered.
-            }
-
-            receiverRegistered = false
-        }
-
-        discoveryRunning = false
-        channel = null
-    }
-
-    private fun handleConnectionChanged(intent: Intent) {
-        val networkInfo = getNetworkInfo(intent)
-
-        if (networkInfo?.isConnected != true) {
-            listener.onConnectionChanged(null)
-            return
-        }
-
-        if (!ready()) return
-
-        manager?.requestConnectionInfo(
-            channel
-        ) { info: WifiP2pInfo ->
-            listener.onConnectionChanged(info)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun getNetworkInfo(intent: Intent): NetworkInfo? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(
-                WifiP2pManager.EXTRA_NETWORK_INFO,
-                NetworkInfo::class.java
-            )
-        } else {
-            intent.getParcelableExtra(
-                WifiP2pManager.EXTRA_NETWORK_INFO
-            )
-        }
-    }
-
-    private fun registerReceiverIfNeeded() {
-        if (receiverRegistered) return
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(
-                    receiver,
-                    intentFilter,
-                    Context.RECEIVER_NOT_EXPORTED
-                )
+        fun requiredPermissions(): Array<String> {
+            return if (Build.VERSION.SDK_INT >= 33) {
+                arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
             } else {
-                @Suppress("DEPRECATION")
-                context.registerReceiver(receiver, intentFilter)
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
             }
-
-            receiverRegistered = true
-        } catch (exception: SecurityException) {
-            listener.onError(
-                "Unable to register Wi-Fi Direct receiver: " +
-                    (exception.message ?: "permission denied")
-            )
         }
     }
 
-    private fun ready(): Boolean {
-        if (!hasRequiredPermissions()) {
+    private fun hasRequiredPermission(): Boolean {
+        return requiredPermissions().all { permission ->
+            ContextCompat.checkSelfPermission(
+                appContext,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun checkReady(): Boolean {
+        if (manager == null || channel == null) {
             listener.onError(
-                "Wi-Fi Direct permission is missing. Grant the required permission first."
+                "This phone could not initialize Wi-Fi Direct."
             )
             return false
         }
 
-        if (manager == null || channel == null) {
+        if (!hasRequiredPermission()) {
             listener.onError(
-                "Wi-Fi Direct is not initialized. Initialize it first."
+                "MAFX SHARE needs the nearby Wi-Fi devices permission. " +
+                    "Allow it in Android settings and try again."
             )
             return false
         }
@@ -290,33 +130,218 @@ internal class WifiDirectManager(
         return true
     }
 
-    private fun hasRequiredPermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.NEARBY_WIFI_DEVICES
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+    /**
+     * Register for Wi-Fi Direct system broadcasts.
+     * Call this before discovering or connecting to devices.
+     */
+    fun start(): Boolean {
+        if (!checkReady()) return false
+
+        if (registered) return true
+
+        val filter = IntentFilter().apply {
+            addAction(
+                WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION
+            )
+            addAction(
+                WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION
+            )
+            addAction(
+                WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION
+            )
+        }
+
+        try {
+            ContextCompat.registerReceiver(
+                appContext,
+                receiver,
+                filter,
+                ContextCompat.RECEIVER_EXPORTED
+            )
+
+            registered = true
+            return true
+        } catch (e: Exception) {
+            listener.onError(
+                e.message ?: "Could not start Wi-Fi Direct monitoring."
+            )
+            return false
         }
     }
 
-    private fun failureReason(reason: Int): String {
-        return when (reason) {
-            WifiP2pManager.P2P_UNSUPPORTED ->
-                "Wi-Fi Direct is not supported."
+    /**
+     * Find nearby Wi-Fi Direct devices.
+     */
+    fun discoverPeers() {
+        if (!checkReady()) return
 
-            WifiP2pManager.BUSY ->
-                "The Wi-Fi Direct service is busy. Try again."
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
 
-            WifiP2pManager.ERROR ->
-                "A system error occurred."
+        wifiManager.discoverPeers(
+            wifiChannel,
+            object : WifiP2pManager.ActionListener {
 
-            else ->
-                "Unknown error (code $reason)."
+                override fun onSuccess() {
+                    // The peers-changed broadcast will provide the list.
+                }
+
+                override fun onFailure(reason: Int) {
+                    listener.onError(
+                        "Could not search for nearby devices. " +
+                            "Wi-Fi Direct error code: $reason"
+                    )
+                }
+            }
+        )
+    }
+
+    /**
+     * Return the latest list of discovered devices.
+     */
+    fun requestPeers() {
+        if (!checkReady()) return
+
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
+
+        wifiManager.requestPeers(
+            wifiChannel
+        ) { devices: WifiP2pDeviceList ->
+            listener.onPeersAvailable(
+                devices.deviceList.toList()
+            )
         }
+    }
+
+    /**
+     * Connect to the selected phone.
+     *
+     * groupOwnerIntent = 0 prefers that the other phone
+     * becomes the Wi-Fi Direct group owner.
+     *
+     * This is a preference, not a guarantee.
+     */
+    fun connectToDevice(device: WifiP2pDevice) {
+        if (!checkReady()) return
+
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
+
+        val config = WifiP2pConfig().apply {
+            deviceAddress = device.deviceAddress
+            groupOwnerIntent = 0
+        }
+
+        wifiManager.connect(
+            wifiChannel,
+            config,
+            object : WifiP2pManager.ActionListener {
+
+                override fun onSuccess() {
+                    // Wait for the connection-changed broadcast.
+                }
+
+                override fun onFailure(reason: Int) {
+                    listener.onError(
+                        "Could not connect to ${device.deviceName}. " +
+                            "Wi-Fi Direct error code: $reason"
+                    )
+                }
+            }
+        )
+    }
+
+    /**
+     * Create a Wi-Fi Direct group on this phone.
+     * Intended for the receiving phone.
+     */
+    fun createReceiverGroup(
+        onCreated: () -> Unit
+    ) {
+        if (!checkReady()) return
+
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
+
+        wifiManager.createGroup(
+            wifiChannel,
+            object : WifiP2pManager.ActionListener {
+
+                override fun onSuccess() {
+                    onCreated()
+                }
+
+                override fun onFailure(reason: Int) {
+                    listener.onError(
+                        "Could not create the receiving connection. " +
+                            "Wi-Fi Direct error code: $reason"
+                    )
+                }
+            }
+        )
+    }
+
+    /**
+     * Request the IP and group-owner information after connection.
+     */
+    fun requestConnectionInfo() {
+        if (!checkReady()) return
+
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
+
+        wifiManager.requestConnectionInfo(
+            wifiChannel
+        ) { info: WifiP2pInfo ->
+
+            if (info.groupFormed) {
+                listener.onConnectionInfoAvailable(info)
+            } else {
+                listener.onDisconnected()
+            }
+        }
+    }
+
+    /**
+     * Disconnect and remove the Wi-Fi Direct group.
+     */
+    fun disconnect() {
+        val wifiManager = manager ?: return
+        val wifiChannel = channel ?: return
+
+        if (!hasRequiredPermission()) return
+
+        wifiManager.removeGroup(
+            wifiChannel,
+            object : WifiP2pManager.ActionListener {
+
+                override fun onSuccess() {
+                    listener.onDisconnected()
+                }
+
+                override fun onFailure(reason: Int) {
+                    listener.onError(
+                        "Could not disconnect Wi-Fi Direct. " +
+                            "Error code: $reason"
+                    )
+                }
+            }
+        )
+    }
+
+    /**
+     * Stop monitoring Wi-Fi Direct broadcasts.
+     */
+    fun stopMonitoring() {
+        if (!registered) return
+
+        try {
+            appContext.unregisterReceiver(receiver)
+        } catch (_: Exception) {
+            // Receiver may already have been unregistered.
+        }
+
+        registered = false
     }
 }
