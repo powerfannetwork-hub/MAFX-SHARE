@@ -1,12 +1,10 @@
 package com.mafx.share
 
-import android.Manifest
 import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
-import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -38,11 +36,6 @@ class MainActivity : AppCompatActivity(),
     private lateinit var wifiDirectManager: WifiDirectManager
     private lateinit var hotspotController: HotspotController
 
-private var hotspotFallbackAttempted = false
-private var usingHotspotFallback = false
-
-private var hotspotSsid: String? = null
-private var hotspotPassword: String? = null
     private var receiveSession: ReceiveSession? = null
     private var transferClient: TransferClient? = null
 
@@ -52,15 +45,22 @@ private var hotspotPassword: String? = null
 
     private var receivingMode = false
     private var peerDialogShowing = false
-
     private var pendingWifiAction: (() -> Unit)? = null
+
+    private var hotspotFallbackAttempted = false
+    private var usingHotspotFallback = false
+    private var hotspotSsid: String? = null
+    private var hotspotPassword: String? = null
+
+    private var destroyed = false
 
     private val permissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { results ->
 
-            val allGranted = results.values.all { it }
+            val allGranted =
+                results.values.all { it }
 
             if (allGranted) {
                 val action = pendingWifiAction
@@ -68,15 +68,20 @@ private var hotspotPassword: String? = null
 
                 if (wifiDirectManager.start()) {
                     action?.invoke()
+                } else if (receivingMode) {
+                    startHotspotFallback()
                 }
             } else {
                 pendingWifiAction = null
 
-                showError(
-                    "MAFX SHARE yana buƙatar izinin " +
-                        "Wi-Fi Direct. Ka ba shi izinin " +
-                        "Nearby devices a saitin wayarka."
-                )
+                if (receivingMode) {
+                    startHotspotFallback()
+                } else {
+                    showError(
+                        "MAFX SHARE yana buƙatar izinin " +
+                            "Nearby devices domin amfani da Wi-Fi Direct."
+                    )
+                }
             }
         }
 
@@ -158,7 +163,6 @@ private var hotspotPassword: String? = null
                     connection.ipAddress,
                     connection.port
                 )
-
             } catch (e: Exception) {
                 showError(
                     e.message ?: "QR code ɗin bai dace ba."
@@ -180,11 +184,18 @@ private var hotspotPassword: String? = null
             this
         )
 
+        hotspotController =
+            HotspotController(applicationContext)
+
         setStatus(
-            "A shirye. Za ka iya haɗa wayoyi kusa " +
-                "ta Wi-Fi Direct ba tare da internet ba."
+            "A shirye. Za ka iya aika fayiloli tsakanin wayoyi " +
+                "ta Wi-Fi Direct ko Hotspot."
         )
     }
+
+    // --------------------------------------------------
+    // SCREEN
+    // --------------------------------------------------
 
     private fun buildScreen() {
 
@@ -294,7 +305,6 @@ private var hotspotPassword: String? = null
             askForReceiverIp { ip ->
 
                 selectedDestinationIp = ip
-
                 selectedDestinationPort =
                     TransferClient.DEFAULT_PORT
 
@@ -386,7 +396,6 @@ private var hotspotPassword: String? = null
         text: String,
         action: () -> Unit
     ) {
-
         val button = Button(this).apply {
             this.text = text
             isAllCaps = false
@@ -408,10 +417,13 @@ private var hotspotPassword: String? = null
         )
     }
 
+    // --------------------------------------------------
+    // WIFI PERMISSIONS
+    // --------------------------------------------------
+
     private fun withWifiPermissions(
         action: () -> Unit
     ) {
-
         val missingPermissions =
             WifiDirectManager.requiredPermissions()
                 .filter { permission ->
@@ -427,12 +439,13 @@ private var hotspotPassword: String? = null
             permissionLauncher.launch(
                 missingPermissions.toTypedArray()
             )
-
             return
         }
 
         if (wifiDirectManager.start()) {
             action()
+        } else if (receivingMode) {
+            startHotspotFallback()
         }
     }
 
@@ -443,6 +456,13 @@ private var hotspotPassword: String? = null
     private fun startReceiving() {
 
         receivingMode = true
+        hotspotFallbackAttempted = false
+        usingHotspotFallback = false
+        hotspotSsid = null
+        hotspotPassword = null
+
+        receiveSession?.stop()
+        receiveSession = null
 
         receiveQrImage.setImageDrawable(null)
 
@@ -455,9 +475,15 @@ private var hotspotPassword: String? = null
 
         withWifiPermissions {
 
+            if (!receivingMode) return@withWifiPermissions
+
             wifiDirectManager.createReceiverGroup {
 
                 runOnUiThread {
+                    if (!receivingMode || destroyed) {
+                        return@runOnUiThread
+                    }
+
                     setStatus(
                         "An shirya haɗin. " +
                             "Ana jiran wayar da za ta aika."
@@ -469,9 +495,118 @@ private var hotspotPassword: String? = null
         }
     }
 
+    // --------------------------------------------------
+    // HOTSPOT FALLBACK
+    // --------------------------------------------------
+
+    private fun startHotspotFallback() {
+
+        if (!receivingMode ||
+            hotspotFallbackAttempted ||
+            destroyed
+        ) {
+            return
+        }
+
+        hotspotFallbackAttempted = true
+        usingHotspotFallback = true
+
+        runOnUiThread {
+            setStatus(
+                "Wi-Fi Direct bai yi nasara ba. " +
+                    "Ana ƙoƙarin kunna Hotspot..."
+            )
+
+            receiveInfoText.text =
+                "Ana ƙoƙarin kunna Hotspot..."
+        }
+
+        hotspotController.start(
+            object : HotspotController.Listener {
+
+                override fun onHotspotStarted(
+                    ssid: String,
+                    password: String
+                ) {
+                    runOnUiThread {
+
+                        if (!receivingMode || destroyed) {
+                            hotspotController.stop()
+                            return@runOnUiThread
+                        }
+
+                        hotspotSsid = ssid
+                        hotspotPassword = password
+
+                        val ip =
+                            NetworkAddress.getLocalIPv4Address()
+
+                        if (ip.isNullOrBlank()) {
+                            setStatus(
+                                "An kunna Hotspot amma ba a gano IP ba."
+                            )
+
+                            showError(
+                                "An kunna Hotspot, amma ba a gano IP ba.\n\n" +
+                                    "Ka duba saitunan Hotspot na wayarka. " +
+                                    "Idan matsalar ta ci gaba, sake gwadawa."
+                            )
+                            return@runOnUiThread
+                        }
+
+                        setStatus(
+                            "An kunna Hotspot. Haɗa ɗayar wayar da shi."
+                        )
+
+                        startReceiveServer(ip)
+                    }
+                }
+
+                override fun onHotspotStopped() {
+                    runOnUiThread {
+                        if (receivingMode && !destroyed) {
+                            setStatus(
+                                "An dakatar da Hotspot."
+                            )
+                        }
+                    }
+                }
+
+                override fun onHotspotError(
+                    message: String
+                ) {
+                    runOnUiThread {
+
+                        if (!receivingMode || destroyed) {
+                            return@runOnUiThread
+                        }
+
+                        setStatus(
+                            "An kasa kunna Hotspot."
+                        )
+
+                        receiveInfoText.text =
+                            "Ba a iya kunna Hotspot ba."
+
+                        showError(
+                            "$message\n\n" +
+                                "Ka tabbatar Wi-Fi yana kunne, " +
+                                "sannan ka sake gwadawa."
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    // --------------------------------------------------
+    // START FILE RECEIVING SERVER
+    // --------------------------------------------------
+
     private fun startReceiveServer(
         preferredIp: String
     ) {
+        if (!receivingMode || destroyed) return
 
         if (receiveSession?.isRunning() == true) {
             return
@@ -490,6 +625,11 @@ private var hotspotPassword: String? = null
         session.onReady = { ip, port, payload ->
 
             runOnUiThread {
+
+                if (!receivingMode || destroyed) {
+                    return@runOnUiThread
+                }
+
                 try {
                     val bitmap: Bitmap =
                         ConnectionQr.generateBitmap(payload)
@@ -497,12 +637,27 @@ private var hotspotPassword: String? = null
                     receiveQrImage.setImageBitmap(bitmap)
 
                     receiveInfoText.text =
-                        "An shirya karɓar fayil!\n" +
-                            "IP: $ip\n" +
-                            "Port: $port\n\n" +
-                            "Ka buɗe FIND NEARBY DEVICES " +
-                            "a wayar da za ta aika, ko ka " +
-                            "duba wannan QR code."
+                        if (usingHotspotFallback) {
+
+                            "An shirya karɓar fayil ta Hotspot!\n\n" +
+                                "Hotspot name: ${hotspotSsid.orEmpty()}\n" +
+                                "Password: ${hotspotPassword.orEmpty()}\n" +
+                                "Receiver IP: $ip\n" +
+                                "Port: $port\n\n" +
+                                "A ɗayar wayar, buɗe saitunan Wi-Fi " +
+                                "ka haɗa da wannan Hotspot. " +
+                                "Bayan haɗawa, buɗe MAFX SHARE " +
+                                "ka zaɓi ENTER RECEIVER IP."
+
+                        } else {
+
+                            "An shirya karɓar fayil!\n" +
+                                "IP: $ip\n" +
+                                "Port: $port\n\n" +
+                                "Ka buɗe FIND NEARBY DEVICES " +
+                                "a wayar da za ta aika, ko ka " +
+                                "duba wannan QR code."
+                        }
 
                     setStatus(
                         "MAFX SHARE yana jiran fayil."
@@ -520,6 +675,9 @@ private var hotspotPassword: String? = null
         session.onFileReceived = { filename, size ->
 
             runOnUiThread {
+
+                if (destroyed) return@runOnUiThread
+
                 setStatus(
                     "An karɓi $filename " +
                         "(${formatBytes(size)})"
@@ -536,7 +694,13 @@ private var hotspotPassword: String? = null
         session.onError = { message ->
 
             runOnUiThread {
-                setStatus("Kuskuren karɓa: $message")
+
+                if (destroyed) return@runOnUiThread
+
+                setStatus(
+                    "Kuskuren karɓa: $message"
+                )
+
                 showError(message)
             }
         }
@@ -546,19 +710,32 @@ private var hotspotPassword: String? = null
 
     private fun stopReceiving() {
 
+        receivingMode = false
+
         receiveSession?.stop()
         receiveSession = null
 
-        receivingMode = false
+        if (::hotspotController.isInitialized) {
+            hotspotController.stop()
+        }
+
+        hotspotFallbackAttempted = false
+        usingHotspotFallback = false
+        hotspotSsid = null
+        hotspotPassword = null
 
         receiveQrImage.setImageDrawable(null)
 
         receiveInfoText.text =
             "An dakatar da karɓar fayil."
 
-        wifiDirectManager.disconnect()
+        if (::wifiDirectManager.isInitialized) {
+            wifiDirectManager.disconnect()
+        }
 
-        setStatus("An dakatar da karɓar fayil.")
+        setStatus(
+            "An dakatar da karɓar fayil."
+        )
     }
 
     // --------------------------------------------------
@@ -568,7 +745,6 @@ private var hotspotPassword: String? = null
     private fun findNearbyDevices() {
 
         receivingMode = false
-
         peerDialogShowing = false
 
         setStatus(
@@ -583,16 +759,20 @@ private var hotspotPassword: String? = null
     override fun onWifiP2pStateChanged(
         enabled: Boolean
     ) {
-
         runOnUiThread {
+
             if (enabled) {
                 setStatus(
                     "Wi-Fi Direct yana aiki."
                 )
             } else {
                 setStatus(
-                    "Ka kunna Wi-Fi a saitin wayarka."
+                    "Wi-Fi Direct a kashe yake."
                 )
+
+                if (receivingMode) {
+                    startHotspotFallback()
+                }
             }
         }
     }
@@ -600,7 +780,6 @@ private var hotspotPassword: String? = null
     override fun onPeersAvailable(
         peers: List<WifiP2pDevice>
     ) {
-
         runOnUiThread {
 
             if (receivingMode) {
@@ -629,22 +808,15 @@ private var hotspotPassword: String? = null
                     ?: "Android device"
 
                 val state = when (device.status) {
-                    WifiP2pDevice.AVAILABLE ->
-                        "Available"
-
-                    WifiP2pDevice.INVITED ->
-                        "Invited"
-
-                    WifiP2pDevice.CONNECTED ->
-                        "Connected"
-
-                    WifiP2pDevice.FAILED ->
-                        "Failed"
-
+                    WifiP2pDevice.AVAILABLE -> "Available"
+                    WifiP2pDevice.INVITED -> "Invited"
+                    WifiP2pDevice.CONNECTED -> "Connected"
+                    WifiP2pDevice.FAILED -> "Failed"
                     else -> "Unknown"
                 }
 
                 "$name — $state"
+
             }.toTypedArray()
 
             AlertDialog.Builder(this)
@@ -670,13 +842,19 @@ private var hotspotPassword: String? = null
         }
     }
 
+    // --------------------------------------------------
+    // WIFI DIRECT CONNECTION INFORMATION
+    // --------------------------------------------------
+
     override fun onConnectionInfoAvailable(
         info: WifiP2pInfo
     ) {
-
         runOnUiThread {
 
             if (!info.groupFormed) {
+                if (receivingMode) {
+                    startHotspotFallback()
+                }
                 return@runOnUiThread
             }
 
@@ -688,9 +866,7 @@ private var hotspotPassword: String? = null
                         ?.hostAddress
 
                     if (ip.isNullOrBlank()) {
-                        showError(
-                            "An haɗu amma ba a gano IP ba."
-                        )
+                        startHotspotFallback()
                         return@runOnUiThread
                     }
 
@@ -699,22 +875,19 @@ private var hotspotPassword: String? = null
                             "Ana shirya karɓar fayil."
                     )
 
+                    usingHotspotFallback = false
                     startReceiveServer(ip)
 
                 } else {
 
                     setStatus(
-                        "An haɗu da wata waya, " +
-                            "amma wannan wayar ba ita " +
-                            "ce mai karɓar haɗin ba."
+                        "An haɗu da wata waya, amma wannan " +
+                            "wayar ba ita ce mai karɓar haɗin ba."
                     )
                 }
 
                 return@runOnUiThread
             }
-
-            // Lokacin aika fayil, muna tsammanin
-            // wayar mai karɓa ce group owner.
 
             if (info.isGroupOwner) {
 
@@ -739,7 +912,6 @@ private var hotspotPassword: String? = null
             }
 
             selectedDestinationIp = receiverIp
-
             selectedDestinationPort =
                 TransferClient.DEFAULT_PORT
 
@@ -761,27 +933,37 @@ private var hotspotPassword: String? = null
     }
 
     override fun onDisconnected() {
-        // Ana iya samun wannan yayin fara haɗin.
-        // Saboda haka ba za mu katse aikin nan take ba.
+        // Ba za mu dakatar da aikin nan take ba.
     }
 
-    override fun onError(message: String) {
-
+    override fun onError(
+        message: String
+    ) {
         runOnUiThread {
-            setStatus("Wi-Fi Direct: $message")
+
+            if (receivingMode &&
+                !hotspotFallbackAttempted
+            ) {
+                startHotspotFallback()
+                return@runOnUiThread
+            }
+
+            setStatus(
+                "Wi-Fi Direct: $message"
+            )
+
             showError(message)
         }
     }
 
     // --------------------------------------------------
-    // QR SCAN, MANUAL IP AND FILE SENDING
+    // CHOOSE FILE
     // --------------------------------------------------
 
     private fun askToChooseFile(
         ip: String?,
         port: Int
     ) {
-
         if (!ip.isNullOrBlank()) {
             selectedDestinationIp = ip
         }
@@ -806,10 +988,13 @@ private var hotspotPassword: String? = null
             .show()
     }
 
+    // --------------------------------------------------
+    // ENTER RECEIVER IP
+    // --------------------------------------------------
+
     private fun askForReceiverIp(
         onIpReady: (String) -> Unit
     ) {
-
         val input = EditText(this).apply {
             hint = "Misali: 192.168.49.1"
             setSingleLine(true)
@@ -862,6 +1047,10 @@ private var hotspotPassword: String? = null
         }
     }
 
+    // --------------------------------------------------
+    // SEND FILE
+    // --------------------------------------------------
+
     private fun sendSelectedFile(
         ip: String,
         uri: android.net.Uri,
@@ -874,7 +1063,6 @@ private var hotspotPassword: String? = null
             }
 
         progressBar.progress = 0
-
         progressText.text = "Ana shirya fayil..."
 
         setStatus(
@@ -903,7 +1091,9 @@ private var hotspotPassword: String? = null
                         "(${formatBytes(sent)} / " +
                         "${formatBytes(total)})"
 
-                setStatus("Ana aika fayil...")
+                setStatus(
+                    "Ana aika fayil..."
+                )
             }
         }
 
@@ -932,7 +1122,11 @@ private var hotspotPassword: String? = null
         client.onError = { message ->
 
             runOnUiThread {
-                setStatus("Aika ya gaza: $message")
+
+                setStatus(
+                    "Aika ya gaza: $message"
+                )
+
                 showError(message)
             }
         }
@@ -951,7 +1145,7 @@ private var hotspotPassword: String? = null
     private fun setStatus(
         message: String
     ) {
-        if (::statusText.isInitialized) {
+        if (::statusText.isInitialized && !destroyed) {
             statusText.text = message
         }
     }
@@ -959,8 +1153,11 @@ private var hotspotPassword: String? = null
     private fun showError(
         message: String
     ) {
-
         runOnUiThread {
+
+            if (destroyed || isFinishing) {
+                return@runOnUiThread
+            }
 
             AlertDialog.Builder(this)
                 .setTitle("MAFX SHARE")
@@ -1004,14 +1201,29 @@ private var hotspotPassword: String? = null
         ).toInt()
     }
 
+    // --------------------------------------------------
+    // CLEANUP
+    // --------------------------------------------------
+
     override fun onDestroy() {
 
+        destroyed = true
+
         receiveSession?.stop()
+        receiveSession = null
 
         transferClient?.shutdown()
+        transferClient = null
 
-        wifiDirectManager.stopMonitoring()
+        if (::hotspotController.isInitialized) {
+            hotspotController.stop()
+        }
+
+        if (::wifiDirectManager.isInitialized) {
+            wifiDirectManager.stopMonitoring()
+        }
 
         super.onDestroy()
     }
 }
+```0
