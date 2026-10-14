@@ -1,7 +1,12 @@
 package com.mafx.share
 
+import android.Manifest
 import android.app.AlertDialog
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.wifi.p2p.WifiP2pDevice
+import android.net.wifi.p2p.WifiP2pInfo
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -13,120 +18,210 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+
 import com.google.zxing.integration.android.IntentIntegrator
 import com.journeyapps.barcodescanner.ScanIntentResult
 
-/**
- * MAFX SHARE main screen.
- *
- * Uses the current repository transfer wire format:
- * UTF filename, Long file size, then exactly that many file bytes.
- * TransferClient and TransferServer must remain compatible with that format
- * and use port 8988.
- */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(),
+    WifiDirectManager.Listener {
+
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var progressText: TextView
     private lateinit var receiveQrImage: ImageView
     private lateinit var receiveInfoText: TextView
 
+    private lateinit var wifiDirectManager: WifiDirectManager
+
     private var receiveSession: ReceiveSession? = null
     private var transferClient: TransferClient? = null
+
     private var selectedDestinationIp: String? = null
-    private var selectedDestinationPort: Int = TransferClient.DEFAULT_PORT
+    private var selectedDestinationPort: Int =
+        TransferClient.DEFAULT_PORT
+
+    private var receivingMode = false
+    private var peerDialogShowing = false
+
+    private var pendingWifiAction: (() -> Unit)? = null
+
+    private val permissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { results ->
+
+            val allGranted = results.values.all { it }
+
+            if (allGranted) {
+                val action = pendingWifiAction
+                pendingWifiAction = null
+
+                if (wifiDirectManager.start()) {
+                    action?.invoke()
+                }
+            } else {
+                pendingWifiAction = null
+
+                showError(
+                    "MAFX SHARE yana buƙatar izinin " +
+                        "Wi-Fi Direct. Ka ba shi izinin " +
+                        "Nearby devices a saitin wayarka."
+                )
+            }
+        }
 
     private val filePicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        registerForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+
             if (uri == null) {
-                setStatus("File selection cancelled.")
+                setStatus("Ba a zaɓi fayil ba.")
                 return@registerForActivityResult
             }
+
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: Exception) {
-                // Some document providers do not support persistable grants.
+                // Wasu masu samar da fayil ba sa goyon bayan wannan.
             }
-            val savedIp = selectedDestinationIp
-            if (savedIp.isNullOrBlank()) {
+
+            val destinationIp = selectedDestinationIp
+
+            if (destinationIp.isNullOrBlank()) {
                 askForReceiverIp { ip ->
                     selectedDestinationIp = ip
-                    selectedDestinationPort = TransferClient.DEFAULT_PORT
-                    sendSelectedFile(ip, uri, selectedDestinationPort)
+                    selectedDestinationPort =
+                        TransferClient.DEFAULT_PORT
+
+                    sendSelectedFile(
+                        ip,
+                        uri,
+                        selectedDestinationPort
+                    )
                 }
             } else {
-                sendSelectedFile(savedIp, uri, selectedDestinationPort)
+                sendSelectedFile(
+                    destinationIp,
+                    uri,
+                    selectedDestinationPort
+                )
             }
         }
 
     private val qrScanLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val scanResult = ScanIntentResult.parseActivityResult(
-                result.resultCode,
-                result.data
-            )
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+
+            val scanResult =
+                ScanIntentResult.parseActivityResult(
+                    result.resultCode,
+                    result.data
+                )
+
             val contents = scanResult.contents
+
             if (contents.isNullOrBlank()) {
-                setStatus("QR scan cancelled.")
+                setStatus("Ba a karanta QR code ba.")
                 return@registerForActivityResult
             }
+
             try {
-                val connection = ConnectionQr.parsePayload(contents)
+                val connection =
+                    ConnectionQr.parsePayload(contents)
+
                 selectedDestinationIp = connection.ipAddress
                 selectedDestinationPort = connection.port
+
                 Toast.makeText(
                     this,
-                    "Receiver found: ${connection.ipAddress}:${connection.port}",
+                    "An gano mai karɓa: " +
+                        "${connection.ipAddress}:${connection.port}",
                     Toast.LENGTH_LONG
                 ).show()
-                askToChooseFile(connection.ipAddress, connection.port)
+
+                askToChooseFile(
+                    connection.ipAddress,
+                    connection.port
+                )
+
             } catch (e: Exception) {
-                showError(e.message ?: "Invalid MAFX SHARE QR code.")
+                showError(
+                    e.message ?: "QR code ɗin bai dace ba."
+                )
             }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         title = "MAFX SHARE"
+
         buildScreen()
+
         transferClient = TransferClient(applicationContext)
-        setStatus("Ready. Connect both devices to the same Wi-Fi network.")
+
+        wifiDirectManager = WifiDirectManager(
+            this,
+            this
+        )
+
+        setStatus(
+            "A shirye. Za ka iya haɗa wayoyi kusa " +
+                "ta Wi-Fi Direct ba tare da internet ba."
+        )
     }
 
     private fun buildScreen() {
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
+            setPadding(
+                dp(20),
+                dp(20),
+                dp(20),
+                dp(20)
+            )
         }
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(root)
         }
-        val title = TextView(this).apply {
+
+        val heading = TextView(this).apply {
             text = "MAFX SHARE"
             textSize = 28f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(
+                null,
+                android.graphics.Typeface.BOLD
+            )
             gravity = Gravity.CENTER
         }
+
         root.addView(
-            title,
+            heading,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(64)
             )
         )
+
         val subtitle = TextView(this).apply {
             text = "Share files between Android devices"
             textSize = 15f
             gravity = Gravity.CENTER
         }
+
         root.addView(
             subtitle,
             LinearLayout.LayoutParams(
@@ -134,11 +229,18 @@ class MainActivity : AppCompatActivity() {
                 dp(42)
             )
         )
+
         statusText = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(
+                dp(10),
+                dp(10),
+                dp(10),
+                dp(10)
+            )
         }
+
         root.addView(
             statusText,
             LinearLayout.LayoutParams(
@@ -146,36 +248,61 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
+
         addButton(root, "RECEIVE FILES") {
             startReceiving()
         }
-        addButton(root, "SEND FILES") {
-            selectedDestinationPort = TransferClient.DEFAULT_PORT
-            askToChooseFile(null, TransferClient.DEFAULT_PORT)
+
+        addButton(root, "FIND NEARBY DEVICES") {
+            findNearbyDevices()
         }
+
+        addButton(root, "SEND FILES") {
+            receivingMode = false
+
+            selectedDestinationPort =
+                TransferClient.DEFAULT_PORT
+
+            askToChooseFile(
+                selectedDestinationIp,
+                TransferClient.DEFAULT_PORT
+            )
+        }
+
         addButton(root, "SCAN RECEIVER QR") {
             val intent = IntentIntegrator(this)
-                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("Scan the MAFX SHARE receiver QR code")
+                .setDesiredBarcodeFormats(
+                    IntentIntegrator.QR_CODE
+                )
+                .setPrompt(
+                    "Scan the MAFX SHARE receiver QR code"
+                )
                 .setBeepEnabled(false)
                 .setOrientationLocked(false)
                 .createScanIntent()
+
             qrScanLauncher.launch(intent)
         }
+
         addButton(root, "ENTER RECEIVER IP") {
             askForReceiverIp { ip ->
+
                 selectedDestinationIp = ip
-                selectedDestinationPort = TransferClient.DEFAULT_PORT
-                askToChooseFile(ip, TransferClient.DEFAULT_PORT)
+
+                selectedDestinationPort =
+                    TransferClient.DEFAULT_PORT
+
+                askToChooseFile(
+                    ip,
+                    TransferClient.DEFAULT_PORT
+                )
             }
         }
+
         addButton(root, "STOP RECEIVING") {
-            receiveSession?.stop()
-            receiveSession = null
-            receiveQrImage.setImageDrawable(null)
-            receiveInfoText.text = "Receiver stopped."
-            setStatus("Receiving stopped.")
+            stopReceiving()
         }
+
         progressBar = ProgressBar(
             this,
             null,
@@ -184,6 +311,7 @@ class MainActivity : AppCompatActivity() {
             max = 100
             progress = 0
         }
+
         root.addView(
             progressBar,
             LinearLayout.LayoutParams(
@@ -191,11 +319,13 @@ class MainActivity : AppCompatActivity() {
                 dp(24)
             )
         )
+
         progressText = TextView(this).apply {
             text = "Transfer progress: 0%"
             textSize = 13f
             gravity = Gravity.CENTER
         }
+
         root.addView(
             progressText,
             LinearLayout.LayoutParams(
@@ -203,11 +333,19 @@ class MainActivity : AppCompatActivity() {
                 dp(36)
             )
         )
+
         receiveInfoText = TextView(this).apply {
+            text = "Ba a fara karɓar fayil ba."
             textSize = 14f
             gravity = Gravity.CENTER
-            setPadding(dp(8), dp(12), dp(8), dp(8))
+            setPadding(
+                dp(8),
+                dp(12),
+                dp(8),
+                dp(8)
+            )
         }
+
         root.addView(
             receiveInfoText,
             LinearLayout.LayoutParams(
@@ -215,11 +353,15 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
+
         receiveQrImage = ImageView(this).apply {
-            contentDescription = "MAFX SHARE receiver connection QR code"
+            contentDescription =
+                "MAFX SHARE receiver connection QR code"
+
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
         }
+
         root.addView(
             receiveQrImage,
             LinearLayout.LayoutParams(
@@ -233,12 +375,21 @@ class MainActivity : AppCompatActivity() {
         setContentView(scroll)
     }
 
-    private fun addButton(parent: LinearLayout, text: String, action: () -> Unit) {
+    private fun addButton(
+        parent: LinearLayout,
+        text: String,
+        action: () -> Unit
+    ) {
+
         val button = Button(this).apply {
             this.text = text
             isAllCaps = false
-            setOnClickListener { action() }
+
+            setOnClickListener {
+                action()
+            }
         }
+
         parent.addView(
             button,
             LinearLayout.LayoutParams(
@@ -251,46 +402,135 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun startReceiving() {
-        if (receiveSession?.isRunning() == true) {
-            setStatus("Receiver is already running.")
+    private fun withWifiPermissions(
+        action: () -> Unit
+    ) {
+
+        val missingPermissions =
+            WifiDirectManager.requiredPermissions()
+                .filter { permission ->
+                    ContextCompat.checkSelfPermission(
+                        this,
+                        permission
+                    ) != PackageManager.PERMISSION_GRANTED
+                }
+
+        if (missingPermissions.isNotEmpty()) {
+            pendingWifiAction = action
+
+            permissionLauncher.launch(
+                missingPermissions.toTypedArray()
+            )
+
             return
         }
 
-        receiveQrImage.setImageDrawable(null)
-        receiveInfoText.text = "Starting receiver..."
-        setStatus("Starting receiver on port ${ReceiveSession.PORT}.")
+        if (wifiDirectManager.start()) {
+            action()
+        }
+    }
 
-        val session = ReceiveSession(applicationContext)
-        receiveSession = session
-        session.onReady = { ip, port, payload ->
-            runOnUiThread {
-                try {
-                    val bitmap: Bitmap = ConnectionQr.generateBitmap(payload)
-                    receiveQrImage.setImageBitmap(bitmap)
-                    receiveInfoText.text =
-                        "Receiver is ready.\nIP: $ip\nPort: $port\n" +
-                        "Connect the sender to the same Wi-Fi network, then scan this QR."
-                    setStatus("Waiting for incoming files...")
-                } catch (e: Exception) {
-                    setStatus("Receiver started, but QR generation failed.")
-                    showError(e.message ?: "Could not generate connection QR.")
+    // --------------------------------------------------
+    // RECEIVE FILES
+    // --------------------------------------------------
+
+    private fun startReceiving() {
+
+        receivingMode = true
+
+        receiveQrImage.setImageDrawable(null)
+
+        receiveInfoText.text =
+            "Ana shirya haɗin Wi-Fi Direct..."
+
+        setStatus(
+            "Ana kunna Wi-Fi Direct domin karɓar fayiloli."
+        )
+
+        withWifiPermissions {
+
+            wifiDirectManager.createReceiverGroup {
+
+                runOnUiThread {
+                    setStatus(
+                        "An shirya haɗin. " +
+                            "Ana jiran wayar da za ta aika."
+                    )
+
+                    wifiDirectManager.requestConnectionInfo()
                 }
             }
         }
-        session.onFileReceived = { filename, size ->
+    }
+
+    private fun startReceiveServer(
+        preferredIp: String
+    ) {
+
+        if (receiveSession?.isRunning() == true) {
+            return
+        }
+
+        receiveInfoText.text =
+            "Ana fara sabar karɓar fayil..."
+
+        val session = ReceiveSession(
+            applicationContext,
+            preferredIp
+        )
+
+        receiveSession = session
+
+        session.onReady = { ip, port, payload ->
+
             runOnUiThread {
-                setStatus("Received: $filename (${formatBytes(size)})")
+                try {
+                    val bitmap: Bitmap =
+                        ConnectionQr.generateBitmap(payload)
+
+                    receiveQrImage.setImageBitmap(bitmap)
+
+                    receiveInfoText.text =
+                        "An shirya karɓar fayil!\n" +
+                            "IP: $ip\n" +
+                            "Port: $port\n\n" +
+                            "Ka buɗe FIND NEARBY DEVICES " +
+                            "a wayar da za ta aika, ko ka " +
+                            "duba wannan QR code."
+
+                    setStatus(
+                        "MAFX SHARE yana jiran fayil."
+                    )
+
+                } catch (e: Exception) {
+                    showError(
+                        e.message
+                            ?: "An kasa samar da QR code."
+                    )
+                }
+            }
+        }
+
+        session.onFileReceived = { filename, size ->
+
+            runOnUiThread {
+                setStatus(
+                    "An karɓi $filename " +
+                        "(${formatBytes(size)})"
+                )
+
                 Toast.makeText(
                     this,
-                    "File received: $filename",
+                    "An karɓi fayil: $filename",
                     Toast.LENGTH_LONG
                 ).show()
             }
         }
+
         session.onError = { message ->
+
             runOnUiThread {
-                setStatus("Receive error: $message")
+                setStatus("Kuskuren karɓa: $message")
                 showError(message)
             }
         }
@@ -298,16 +538,259 @@ class MainActivity : AppCompatActivity() {
         session.start()
     }
 
-    private fun askToChooseFile(ip: String?, port: Int) {
-        if (!ip.isNullOrBlank()) selectedDestinationIp = ip
+    private fun stopReceiving() {
+
+        receiveSession?.stop()
+        receiveSession = null
+
+        receivingMode = false
+
+        receiveQrImage.setImageDrawable(null)
+
+        receiveInfoText.text =
+            "An dakatar da karɓar fayil."
+
+        wifiDirectManager.disconnect()
+
+        setStatus("An dakatar da karɓar fayil.")
+    }
+
+    // --------------------------------------------------
+    // FIND NEARBY DEVICES
+    // --------------------------------------------------
+
+    private fun findNearbyDevices() {
+
+        receivingMode = false
+
+        peerDialogShowing = false
+
+        setStatus(
+            "Ana neman wayoyin da ke kusa..."
+        )
+
+        withWifiPermissions {
+            wifiDirectManager.discoverPeers()
+        }
+    }
+
+    override fun onWifiP2pStateChanged(
+        enabled: Boolean
+    ) {
+
+        runOnUiThread {
+            if (enabled) {
+                setStatus(
+                    "Wi-Fi Direct yana aiki."
+                )
+            } else {
+                setStatus(
+                    "Ka kunna Wi-Fi a saitin wayarka."
+                )
+            }
+        }
+    }
+
+    override fun onPeersAvailable(
+        peers: List<WifiP2pDevice>
+    ) {
+
+        runOnUiThread {
+
+            if (receivingMode) {
+                return@runOnUiThread
+            }
+
+            if (peers.isEmpty()) {
+                setStatus(
+                    "Ba a gano wata waya ba tukuna. " +
+                        "Ka tabbatar wayar mai karɓa ta " +
+                        "buɗe RECEIVE FILES."
+                )
+                return@runOnUiThread
+            }
+
+            if (peerDialogShowing) {
+                return@runOnUiThread
+            }
+
+            peerDialogShowing = true
+
+            val deviceNames = peers.map { device ->
+
+                val name = device.deviceName
+                    .takeIf { it.isNotBlank() }
+                    ?: "Android device"
+
+                val state = when (device.status) {
+                    WifiP2pDevice.AVAILABLE ->
+                        "Available"
+
+                    WifiP2pDevice.INVITED ->
+                        "Invited"
+
+                    WifiP2pDevice.CONNECTED ->
+                        "Connected"
+
+                    WifiP2pDevice.FAILED ->
+                        "Failed"
+
+                    else -> "Unknown"
+                }
+
+                "$name — $state"
+            }.toTypedArray()
+
+            AlertDialog.Builder(this)
+                .setTitle("Wayoyin da ke kusa")
+                .setItems(deviceNames) { _, which ->
+
+                    val device = peers[which]
+
+                    setStatus(
+                        "Ana haɗawa da " +
+                            device.deviceName + "..."
+                    )
+
+                    wifiDirectManager.connectToDevice(
+                        device
+                    )
+                }
+                .setOnDismissListener {
+                    peerDialogShowing = false
+                }
+                .setNegativeButton("CLOSE", null)
+                .show()
+        }
+    }
+
+    override fun onConnectionInfoAvailable(
+        info: WifiP2pInfo
+    ) {
+
+        runOnUiThread {
+
+            if (!info.groupFormed) {
+                return@runOnUiThread
+            }
+
+            if (receivingMode) {
+
+                if (info.isGroupOwner) {
+
+                    val ip = info.groupOwnerAddress
+                        ?.hostAddress
+
+                    if (ip.isNullOrBlank()) {
+                        showError(
+                            "An haɗu amma ba a gano IP ba."
+                        )
+                        return@runOnUiThread
+                    }
+
+                    setStatus(
+                        "An haɗa Wi-Fi Direct. " +
+                            "Ana shirya karɓar fayil."
+                    )
+
+                    startReceiveServer(ip)
+
+                } else {
+
+                    setStatus(
+                        "An haɗu da wata waya, " +
+                            "amma wannan wayar ba ita " +
+                            "ce mai karɓar haɗin ba."
+                    )
+                }
+
+                return@runOnUiThread
+            }
+
+            // Lokacin aika fayil, muna tsammanin
+            // wayar mai karɓa ce group owner.
+
+            if (info.isGroupOwner) {
+
+                setStatus(
+                    "An haɗu, amma wannan wayar ce " +
+                        "mai karɓar haɗin. Ka fara " +
+                        "RECEIVE FILES a wayar da za ta karɓa."
+                )
+
+                return@runOnUiThread
+            }
+
+            val receiverIp = info.groupOwnerAddress
+                ?.hostAddress
+
+            if (receiverIp.isNullOrBlank()) {
+                showError(
+                    "An haɗu amma ba a gano IP " +
+                        "na wayar mai karɓa ba."
+                )
+                return@runOnUiThread
+            }
+
+            selectedDestinationIp = receiverIp
+
+            selectedDestinationPort =
+                TransferClient.DEFAULT_PORT
+
+            setStatus(
+                "An haɗu da wayar mai karɓa: $receiverIp"
+            )
+
+            Toast.makeText(
+                this,
+                "An haɗu! Zaɓi fayil ɗin da za ka aika.",
+                Toast.LENGTH_LONG
+            ).show()
+
+            askToChooseFile(
+                receiverIp,
+                TransferClient.DEFAULT_PORT
+            )
+        }
+    }
+
+    override fun onDisconnected() {
+        // Ana iya samun wannan yayin fara haɗin.
+        // Saboda haka ba za mu katse aikin nan take ba.
+    }
+
+    override fun onError(message: String) {
+
+        runOnUiThread {
+            setStatus("Wi-Fi Direct: $message")
+            showError(message)
+        }
+    }
+
+    // --------------------------------------------------
+    // QR SCAN, MANUAL IP AND FILE SENDING
+    // --------------------------------------------------
+
+    private fun askToChooseFile(
+        ip: String?,
+        port: Int
+    ) {
+
+        if (!ip.isNullOrBlank()) {
+            selectedDestinationIp = ip
+        }
+
         selectedDestinationPort = port
+
         AlertDialog.Builder(this)
-            .setTitle("Choose file")
+            .setTitle("Zaɓi fayil")
             .setMessage(
                 if (selectedDestinationIp.isNullOrBlank()) {
-                    "Choose a file. You will be asked for the receiver IP."
+                    "Zaɓi fayil. Za a tambaye ka IP " +
+                        "na wayar da za ta karɓa."
                 } else {
-                    "Choose a file to send to $selectedDestinationIp:$selectedDestinationPort."
+                    "Zaɓi fayil da za a aika zuwa " +
+                        "$selectedDestinationIp:$selectedDestinationPort"
                 }
             )
             .setNegativeButton("CANCEL", null)
@@ -317,21 +800,35 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun askForReceiverIp(onIpReady: (String) -> Unit) {
+    private fun askForReceiverIp(
+        onIpReady: (String) -> Unit
+    ) {
+
         val input = EditText(this).apply {
-            hint = "Example: 192.168.49.1"
+            hint = "Misali: 192.168.49.1"
             setSingleLine(true)
-            setText(selectedDestinationIp.orEmpty())
+            setText(
+                selectedDestinationIp.orEmpty()
+            )
         }
+
         AlertDialog.Builder(this)
-            .setTitle("Receiver IP address")
-            .setMessage("Both devices must be connected to the same local Wi-Fi network.")
+            .setTitle("IP na wayar mai karɓa")
+            .setMessage(
+                "Shigar da IPv4 address na wayar mai karɓa."
+            )
             .setView(input)
             .setNegativeButton("CANCEL", null)
             .setPositiveButton("CONTINUE") { _, _ ->
-                val ip = input.text.toString().trim()
+
+                val ip = input.text
+                    .toString()
+                    .trim()
+
                 if (!isValidIpText(ip)) {
-                    showError("Enter a valid IPv4 address.")
+                    showError(
+                        "Shigar da IPv4 address mai inganci."
+                    )
                 } else {
                     onIpReady(ip)
                 }
@@ -339,12 +836,23 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun isValidIpText(ip: String): Boolean {
+    private fun isValidIpText(
+        ip: String
+    ): Boolean {
+
         val parts = ip.split(".")
-        if (parts.size != 4) return false
+
+        if (parts.size != 4) {
+            return false
+        }
+
         return parts.all { part ->
+
             val number = part.toIntOrNull()
-            number != null && number in 0..255 && part.isNotBlank()
+
+            number != null &&
+                number in 0..255 &&
+                part.isNotBlank()
         }
     }
 
@@ -353,50 +861,101 @@ class MainActivity : AppCompatActivity() {
         uri: android.net.Uri,
         port: Int = TransferClient.DEFAULT_PORT
     ) {
-        val client = transferClient ?: TransferClient(applicationContext).also {
-            transferClient = it
-        }
+
+        val client = transferClient
+            ?: TransferClient(applicationContext).also {
+                transferClient = it
+            }
+
         progressBar.progress = 0
-        progressText.text = "Preparing file..."
-        setStatus("Connecting to $ip:$port...")
+
+        progressText.text = "Ana shirya fayil..."
+
+        setStatus(
+            "Ana haɗawa da $ip:$port..."
+        )
+
         client.onProgress = { filename, sent, total ->
+
             runOnUiThread {
-                val percent = if (total <= 0L) 100
-                    else ((sent.toDouble() / total.toDouble()) * 100).toInt().coerceIn(0, 100)
+
+                val percent =
+                    if (total <= 0L) {
+                        100
+                    } else {
+                        (
+                            sent.toDouble() /
+                                total.toDouble() *
+                                100
+                        ).toInt().coerceIn(0, 100)
+                    }
+
                 progressBar.progress = percent
+
                 progressText.text =
-                    "$filename: $percent% (${formatBytes(sent)} / ${formatBytes(total)})"
-                setStatus("Sending file...")
+                    "$filename: $percent% " +
+                        "(${formatBytes(sent)} / " +
+                        "${formatBytes(total)})"
+
+                setStatus("Ana aika fayil...")
             }
         }
+
         client.onCompleted = { filename, size ->
+
             runOnUiThread {
+
                 progressBar.progress = 100
-                progressText.text = "Transfer finished: 100%"
-                setStatus("Sent: $filename (${formatBytes(size)}).")
+
+                progressText.text =
+                    "An gama aika fayil: 100%"
+
+                setStatus(
+                    "An aika $filename " +
+                        "(${formatBytes(size)})."
+                )
+
                 Toast.makeText(
                     this,
-                    "File sent: $filename",
+                    "An aika fayil: $filename",
                     Toast.LENGTH_LONG
                 ).show()
             }
         }
+
         client.onError = { message ->
+
             runOnUiThread {
-                setStatus("Send failed: $message")
+                setStatus("Aika ya gaza: $message")
                 showError(message)
             }
         }
 
-        client.sendFile(ip, uri, port)
+        client.sendFile(
+            ip,
+            uri,
+            port
+        )
     }
 
-    private fun setStatus(message: String) {
-        if (::statusText.isInitialized) statusText.text = message
+    // --------------------------------------------------
+    // HELPERS
+    // --------------------------------------------------
+
+    private fun setStatus(
+        message: String
+    ) {
+        if (::statusText.isInitialized) {
+            statusText.text = message
+        }
     }
 
-    private fun showError(message: String) {
+    private fun showError(
+        message: String
+    ) {
+
         runOnUiThread {
+
             AlertDialog.Builder(this)
                 .setTitle("MAFX SHARE")
                 .setMessage(message)
@@ -405,21 +964,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024L) return "$bytes B"
+    private fun formatBytes(
+        bytes: Long
+    ): String {
+
+        if (bytes < 1024L) {
+            return "$bytes B"
+        }
+
         val kb = bytes / 1024.0
-        if (kb < 1024.0) return String.format("%.1f KB", kb)
+
+        if (kb < 1024.0) {
+            return String.format("%.1f KB", kb)
+        }
+
         val mb = kb / 1024.0
-        if (mb < 1024.0) return String.format("%.1f MB", mb)
-        return String.format("%.2f GB", mb / 1024.0)
+
+        if (mb < 1024.0) {
+            return String.format("%.1f MB", mb)
+        }
+
+        return String.format(
+            "%.2f GB",
+            mb / 1024.0
+        )
     }
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    private fun dp(
+        value: Int
+    ): Int {
+        return (
+            value * resources.displayMetrics.density
+        ).toInt()
+    }
 
     override fun onDestroy() {
+
         receiveSession?.stop()
+
         transferClient?.shutdown()
+
+        wifiDirectManager.stopMonitoring()
+
         super.onDestroy()
     }
 }
