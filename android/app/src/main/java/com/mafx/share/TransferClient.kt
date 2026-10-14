@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -13,15 +14,16 @@ import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Sends one file at a time over TCP using the same header as TransferServer. */
+/** Sends one file at a time and waits for the receiver's save-confirmation ACK. */
 class TransferClient(context: Context) {
 
     companion object {
         const val DEFAULT_PORT = 8988
         private const val CONNECT_TIMEOUT = 10_000
         private const val SOCKET_TIMEOUT = 120_000
-        private const val BUFFER_SIZE = 1024 * 1024 // 1 MiB
+        private const val BUFFER_SIZE = 1024 * 1024
         private const val PROGRESS_INTERVAL_MS = 150L
+        private const val ACK_OK = "MAFX_OK"
     }
 
     private val appContext = context.applicationContext
@@ -50,7 +52,6 @@ class TransferClient(context: Context) {
         executor.execute {
             var filename = "file"
             var totalBytes = 0L
-
             try {
                 val ip = destinationIp.trim()
                 if (ip.isBlank()) throw IOException("Enter the receiver's IP address.")
@@ -67,50 +68,47 @@ class TransferClient(context: Context) {
                 socket.tcpNoDelay = true
                 socket.sendBufferSize = BUFFER_SIZE
 
-                val fileInput = appContext.contentResolver.openInputStream(fileUri)
-                    ?: throw IOException("Cannot open the selected file.")
-
-                fileInput.use { input ->
-                    DataOutputStream(
+                appContext.contentResolver.openInputStream(fileUri)?.use { input ->
+                    // Do not close this output stream before reading the receiver ACK.
+                    val output = DataOutputStream(
                         BufferedOutputStream(socket.getOutputStream(), BUFFER_SIZE)
-                    ).use { output ->
-                        // Must match TransferServer.receiveFile(): UTF filename, Long size, then raw bytes.
-                        output.writeUTF(filename)
-                        output.writeLong(totalBytes)
+                    )
+                    output.writeUTF(filename)
+                    output.writeLong(totalBytes)
 
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var sentBytes = 0L
-                        var lastProgressTime = 0L
+                    val buffer = ByteArray(BUFFER_SIZE)
+                    var sentBytes = 0L
+                    var lastProgressTime = 0L
 
-                        while (sentBytes < totalBytes) {
-                            if (Thread.currentThread().isInterrupted || socket.isClosed) {
-                                throw IOException("Transfer cancelled.")
-                            }
-
-                            val wanted = minOf(buffer.size.toLong(), totalBytes - sentBytes).toInt()
-                            val count = input.read(buffer, 0, wanted)
-
-                            if (count < 0) {
-                                throw IOException("The selected file ended unexpectedly.")
-                            }
-                            if (count == 0) continue
-
-                            output.write(buffer, 0, count)
-                            sentBytes += count.toLong()
-
-                            val now = System.currentTimeMillis()
-                            if (now - lastProgressTime >= PROGRESS_INTERVAL_MS || sentBytes >= totalBytes) {
-                                onProgress?.invoke(filename, sentBytes, totalBytes)
-                                lastProgressTime = now
-                            }
+                    while (sentBytes < totalBytes) {
+                        if (Thread.currentThread().isInterrupted || socket.isClosed) {
+                            throw IOException("Transfer cancelled.")
                         }
+                        val wanted = minOf(buffer.size.toLong(), totalBytes - sentBytes).toInt()
+                        val count = input.read(buffer, 0, wanted)
+                        if (count < 0) throw IOException("The selected file ended unexpectedly.")
+                        if (count == 0) continue
 
-                        output.flush()
+                        output.write(buffer, 0, count)
+                        sentBytes += count.toLong()
+                        val now = System.currentTimeMillis()
+                        if (now - lastProgressTime >= PROGRESS_INTERVAL_MS || sentBytes >= totalBytes) {
+                            onProgress?.invoke(filename, sentBytes, totalBytes)
+                            lastProgressTime = now
+                        }
                     }
-                }
+                    output.flush()
+
+                    // Completion is reported only after the receiver confirms the file was saved.
+                    val response = DataInputStream(
+                        BufferedInputStream(socket.getInputStream())
+                    ).readUTF()
+                    if (response != ACK_OK) {
+                        throw IOException("Receiver did not confirm the file was saved. Response: $response")
+                    }
+                } ?: throw IOException("Cannot open the selected file.")
 
                 onCompleted?.invoke(filename, totalBytes)
-
             } catch (e: Exception) {
                 onError?.invoke(e.message ?: "File transfer failed.")
             } finally {
@@ -127,7 +125,6 @@ class TransferClient(context: Context) {
     private fun getFilename(uri: Uri): String {
         var result: String? = null
         var cursor: Cursor? = null
-
         try {
             cursor = appContext.contentResolver.query(
                 uri,
@@ -136,7 +133,6 @@ class TransferClient(context: Context) {
                 null,
                 null
             )
-
             if (cursor != null && cursor.moveToFirst()) {
                 val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (index >= 0) result = cursor.getString(index)
@@ -144,7 +140,6 @@ class TransferClient(context: Context) {
         } finally {
             cursor?.close()
         }
-
         return sanitizeFilename(result ?: uri.lastPathSegment ?: "file")
     }
 
@@ -167,11 +162,9 @@ class TransferClient(context: Context) {
 
         val descriptor = appContext.contentResolver.openAssetFileDescriptor(uri, "r")
             ?: throw IOException("Cannot access the selected file.")
-
         descriptor.use {
             if (it.length >= 0L) return it.length
         }
-
         throw IOException("This file provider does not report file size.")
     }
 
