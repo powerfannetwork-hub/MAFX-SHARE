@@ -4,3 +4,7 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^4.0.0
   google_fonts: ^6.1.0
+dependencies:
+  wifi_iot: ^0.3.18
+  permission_handler: ^11.3.0
+  nearby_connections: ^3.0.0
