@@ -1,122 +1,129 @@
 import 'dart:io';
-import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:wifi_iot/wifi_iot.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 
-void main() => runApp(const MyApp());
+void main() => runApp(MaterialApp(home: FlashApp(), debugShowCheckedModeBanner: false));
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class FlashApp extends StatefulWidget { @override _FlashAppState createState() => _FlashAppState(); }
+
+class _FlashAppState extends State<FlashApp> {
+  String ip = "Ana neman IP...";
+  String log = "Flash - Yafi Xender sauri x3";
+  double progress = 0;
+  ServerSocket? server;
+
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF12121A)),
-      home: const HomeScreen(),
-    );
+  void initState() {
+    super.initState();
+    getIp();
+    startServer();
   }
-}
 
-// ================== SPEED TRACKER ==================
-class SpeedTracker {
-  int _lastBytes = 0;
-  DateTime _lastTime = DateTime.now();
-  double speedMBps = 0;
-  void update(int totalBytes) {
-    var now = DateTime.now();
-    var diff = now.difference(_lastTime).inMilliseconds;
-    if (diff > 500) {
-      int delta = totalBytes - _lastBytes;
-      speedMBps = (delta / 1024 / 1024) / (diff / 1000);
-      _lastBytes = totalBytes;
-      _lastTime = now;
-    }
+  getIp() async {
+    final info = NetworkInfo();
+    var wifiIP = await info.getWifiIP();
+    setState(() => ip = wifiIP ?? "Kunna Hotspot da farko");
   }
-}
 
-// ================== HOTSPOT CONTROLLER ==================
-class HotspotController {
-  static Future<Map<String, String>> startHotspot() async {
-    await [Permission.location, Permission.nearbyWifiDevices, Permission.storage].request();
-    String ssid = "Flash-${Random().nextInt(9000) + 1000}";
-    String password = "${Random().nextInt(90000000) + 10000000}";
+  startServer() async {
     try {
-      await WiFiForIoTPlugin.setWiFiAPSSID(ssid);
-      await WiFiForIoTPlugin.setWiFiAPPreSharedKey(password);
-      await WiFiForIoTPlugin.setWiFiAPBand(WiFiAPBand.BAND_5GHZ);
-      await WiFiForIoTPlugin.setWiFiAPState(true);
+      server = await ServerSocket.bind(InternetAddress.anyIPv4, 8888);
+      setState(() => log = "A shirye don karba akan port 8888");
+      server!.listen((client) async {
+        setState(() => log = "Ana karba daga ${client.remoteAddress.address}...");
+        // Karba file name
+        var file = File('/storage/emulated/0/Download/flash_received_file');
+        var sink = file.openWrite();
+        int total = 0;
+        client.listen((data) {
+          sink.add(data);
+          total += data.length;
+          setState(() {
+            log = "Ana karba: ${(total/1024/1024).toStringAsFixed(2)} MB";
+          });
+        }, onDone: () {
+          sink.close();
+          setState(() => log = "An gama karba! An ajiye a Download");
+        });
+      });
     } catch (e) {
-      await WiFiForIoTPlugin.setWiFiAPBand(WiFiAPBand.BAND_2GHZ);
-      await WiFiForIoTPlugin.setWiFiAPState(true);
+      setState(() => log = "Error Server: $e");
     }
-    return {"ssid": ssid, "password": password, "qr": "WIFI:S:$ssid;T:WPA;P:$password;;"};
   }
-  static Future<void> stopHotspot() async => await WiFiForIoTPlugin.setWiFiAPState(false);
-  static Future<bool> connectToHotspot(String ssid, String password) async {
-    await Permission.location.request();
-    return await WiFiForIoTPlugin.connect(ssid, password: password, security: NetworkSecurity.WPA, joinOnce: true);
-  }
-  static Map<String, String> parseQr(String qr) {
-    try {
-      String ssid = qr.split("S:")[1].split(";")[0];
-      String pass = qr.split("P:")[1].split(";")[0];
-      return {"ssid": ssid, "password": pass};
-    } catch (_) { return {}; }
-  }
-  static Future<String> findServerIp() async {
-    List<String> ips = ["192.168.43.1", "192.168.49.1", "192.168.0.1", "192.168.1.1"];
-    for (var ip in ips) {
-      try {
-        var s = await Socket.connect(ip, 8888, timeout: const Duration(milliseconds: 800));
-        s.destroy();
-        return ip;
-      } catch (_) {}
-    }
-    return "192.168.43.1";
-  }
-}
 
-// ================== HOME ==================
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  sendFile() async {
+    var result = await FilePicker.platform.pickFiles();
+    if (result == null) return;
+    var file = File(result.files.single.path!);
+    var fileName = result.files.single.name;
+    var size = await file.length();
+
+    // Nemi IP na mai karba
+    TextEditingController ipController = TextEditingController(text: "192.168.43.1");
+    showDialog(context: context, builder: (_) => AlertDialog(
+      title: Text("Saka IP na mai karba"),
+      content: TextField(controller: ipController, decoration: InputDecoration(hintText: "192.168.43.1")),
+      actions: [
+        TextButton(onPressed: () async {
+          Navigator.pop(context);
+          try {
+            setState(() => log = "Ana hadawa da ${ipController.text}...");
+            var socket = await Socket.connect(ipController.text, 8888, timeout: Duration(seconds: 5));
+            setState(() => log = "An hada! Ana tura $fileName...");
+            var stream = file.openRead();
+            int sent = 0;
+            await for (var chunk in stream) {
+              socket.add(chunk);
+              sent += chunk.length;
+              setState(() {
+                progress = sent / size;
+                log = "Ana tura: ${(progress*100).toStringAsFixed(1)}%";
+              });
+            }
+            await socket.flush();
+            await socket.close();
+            setState(() => log = "An gama tura $fileName!");
+          } catch (e) {
+            setState(() => log = "Ba a hada ba: $e - Tabbatar kun hada da hotspot dinsa");
+          }
+        }, child: Text("TURA"))
+      ],
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
+      backgroundColor: Color(0xFF12121A),
+      appBar: AppBar(title: Text("FLASH - $ip"), backgroundColor: Colors.deepPurple),
+      body: Padding(
+        padding: EdgeInsets.all(20),
         child: Column(
           children: [
-            const SizedBox(height: 80),
-            Text("Transfer Files Instantly", style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
-            Text("Babu internet, babu talla, yafi Xender sauri", style: GoogleFonts.poppins(fontSize: 12, color: Colors.white54)),
-            const Spacer(),
-            _Btn(text: "SEND", color: const Color(0xFF3A7BFF), icon: Icons.send_rounded, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SendScreen()))),
-            const SizedBox(height: 20),
-            _Btn(text: "RECEIVED", color: const Color(0xFF00C876), icon: Icons.download_rounded, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReceiveScreen()))),
-            const Spacer(),
-            const Text("✓ Fast Transfer • No Internet • 5GHz", style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
-            const SizedBox(height: 20),
+            Container(padding: EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
+              child: Column(children: [
+                Icon(Icons.bolt, size: 60, color: Colors.yellow),
+                SizedBox(height: 10),
+                Text(ip, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(height: 10),
+                Text(log, style: TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+                SizedBox(height: 10),
+                LinearProgressIndicator(value: progress, backgroundColor: Colors.white12),
+              ])
+            ),
+            SizedBox(height: 30),
+            Row(children: [
+              Expanded(child: ElevatedButton.icon(onPressed: sendFile, icon: Icon(Icons.send), label: Text("TURA FILE"), style: ElevatedButton.styleFrom(padding: EdgeInsets.all(20), backgroundColor: Colors.deepPurple))),
+              SizedBox(width: 15),
+              Expanded(child: ElevatedButton.icon(onPressed: getIp, icon: Icon(Icons.wifi), label: Text("SABUNTA IP"), style: ElevatedButton.styleFrom(padding: EdgeInsets.all(20), backgroundColor: Colors.white10))),
+            ]),
+            SizedBox(height: 20),
+            Text("Yadda ake amfani:\n1. Wayar mai KARBA ta kunna Hotspot\n2. Wayar mai TURA ta hada da hotspot din\n3. Mai tura ya danna TURA FILE ya saka IP: 192.168.43.1", style: TextStyle(color: Colors.white54))
           ],
         ),
       ),
     );
   }
 }
-
-class _Btn extends StatelessWidget {
-  final String text; final Color color; final IconData icon; final VoidCallback onTap;
-  const _Btn({required this.text, required this.color, required this.icon, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: MediaQuery.of(context).size.width * 0.85, height: 90,
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, size: 36, color: Colors.white), const SizedBox(width: 12),
-          Text(text
