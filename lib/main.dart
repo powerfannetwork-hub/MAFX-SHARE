@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
-
 import 'screens/home_screen.dart';
-import 'screens/send_screen.dart';
-import 'screens/receive_screen.dart';
-import 'screens/connect_screen.dart';
 import 'screens/transfers_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
