@@ -22,10 +22,27 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ============= CONTROLLER - HOTSPOT =============
+// ================== SPEED TRACKER ==================
+class SpeedTracker {
+  int _lastBytes = 0;
+  DateTime _lastTime = DateTime.now();
+  double speedMBps = 0;
+  void update(int totalBytes) {
+    var now = DateTime.now();
+    var diff = now.difference(_lastTime).inMilliseconds;
+    if (diff > 500) {
+      int delta = totalBytes - _lastBytes;
+      speedMBps = (delta / 1024 / 1024) / (diff / 1000);
+      _lastBytes = totalBytes;
+      _lastTime = now;
+    }
+  }
+}
+
+// ================== HOTSPOT CONTROLLER ==================
 class HotspotController {
   static Future<Map<String, String>> startHotspot() async {
-    await [Permission.location, Permission.nearbyWifiDevices].request();
+    await [Permission.location, Permission.nearbyWifiDevices, Permission.storage].request();
     String ssid = "Flash-${Random().nextInt(9000) + 1000}";
     String password = "${Random().nextInt(90000000) + 10000000}";
     try {
@@ -51,9 +68,20 @@ class HotspotController {
       return {"ssid": ssid, "password": pass};
     } catch (_) { return {}; }
   }
+  static Future<String> findServerIp() async {
+    List<String> ips = ["192.168.43.1", "192.168.49.1", "192.168.0.1", "192.168.1.1"];
+    for (var ip in ips) {
+      try {
+        var s = await Socket.connect(ip, 8888, timeout: const Duration(milliseconds: 800));
+        s.destroy();
+        return ip;
+      } catch (_) {}
+    }
+    return "192.168.43.1";
+  }
 }
 
-// ============= HOME SCREEN =============
+// ================== HOME ==================
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
   @override
@@ -90,102 +118,5 @@ class _Btn extends StatelessWidget {
         width: MediaQuery.of(context).size.width * 0.85, height: 90,
         decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, size: 36), const SizedBox(width: 12),
-          Text(text, style: GoogleFonts.poppins(fontSize: 30, fontWeight: FontWeight.bold)),
-        ]),
-      ),
-    );
-  }
-}
-
-// ============= SEND SCREEN =============
-class SendScreen extends StatefulWidget {
-  const SendScreen({super.key});
-  @override
-  State<SendScreen> createState() => _SendScreenState();
-}
-class _SendScreenState extends State<SendScreen> {
-  Map<String, String>? info;
-  @override
-  void initState() { super.initState(); _init(); }
-  Future<void> _init() async { var i = await HotspotController.startHotspot(); setState(() => info = i); }
-  @override
-  void dispose() { HotspotController.stopHotspot(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(info?["ssid"]?? "Ana kunnawa...")),
-      body: Center(
-        child: info == null? const CircularProgressIndicator() : Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-              child: QrImageView(data: info!["qr"]!, size: 240)),
-            const SizedBox(height: 20),
-            Text("Hotspot: ${info!["ssid"]}", style: const TextStyle(color: Colors.white)),
-            const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FileTransferScreen(isSender: true, ssid: info!["ssid"]!))),
-              child: const Text("ZABI FILE DA ZAKA TURA"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ============= RECEIVE SCREEN =============
-class ReceiveScreen extends StatefulWidget {
-  const ReceiveScreen({super.key});
-  @override
-  State<ReceiveScreen> createState() => _ReceiveScreenState();
-}
-class _ReceiveScreenState extends State<ReceiveScreen> {
-  bool busy = false;
-  void _onDetect(String code) async {
-    if (busy) return; setState(() => busy = true);
-    var p = HotspotController.parseQr(code);
-    if (p.isNotEmpty) {
-      bool ok = await HotspotController.connectToHotspot(p["ssid"]!, p["password"]!);
-      if (ok && mounted) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => FileTransferScreen(isSender: false, ssid: p["ssid"]!)));
-      }
-    }
-    setState(() => busy = false);
-  }
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(children: [
-        MobileScanner(onDetect: (c) => _onDetect(c.barcodes.first.rawValue?? "")),
-        Center(child: Container(width: 250, height: 250, decoration: BoxDecoration(border: Border.all(color: Colors.white, width: 2), borderRadius: BorderRadius.circular(20)))),
-        if (busy) const Center(child: CircularProgressIndicator()),
-        const Positioned(bottom: 40, left: 0, right: 0, child: Text("Duba QR din da ke wayar daya", textAlign: TextAlign.center)),
-      ]),
-    );
-  }
-}
-
-// ============= FILE TRANSFER SCREEN - INJIN GUDU =============
-class FileTransferScreen extends StatefulWidget {
-  final bool isSender; final String ssid;
-  const FileTransferScreen({super.key, required this.isSender, required this.ssid});
-  @override
-  State<FileTransferScreen> createState() => _FileTransferScreenState();
-}
-class _FileTransferScreenState extends State<FileTransferScreen> {
-  List<File> files = [];
-  double progress = 0; String log = "";
-  ServerSocket? server;
-
-  Future<void> pickFiles() async {
-    var res = await FilePicker.platform.pickFiles(allowMultiple: true);
-    if (res!= null) setState(() => files = res.paths.map((p) => File(p!)).toList());
-  }
-
-  Future<void> startSending() async {
-    server = await ServerSocket.bind(InternetAddress.anyIPv4, 8888);
-    setState(() => log = "Ana jira mai karba ya hada... IP: ${server!.address.address}:8888");
-    server!.listen((client) async {
-      for (var file
+          Icon(icon, size: 36, color: Colors.white), const SizedBox(width: 12),
+          Text(text
