@@ -1,6 +1,6 @@
 name: Build MAFX SHARE APK
 
-on:
+'on':
   workflow_dispatch:
   push:
     branches:
@@ -18,6 +18,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check repository files
+        run: |
+          echo "Checking repository structure..."
+          pwd
+          ls -la
+          echo "Searching for pubspec.yaml..."
+          find . -name pubspec.yaml -not -path './.git/*'
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -30,13 +38,19 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Check Flutter installation
-        run: flutter --version
+      - name: Verify Flutter project
+        run: |
+          if [ ! -f pubspec.yaml ]; then
+            echo "ERROR: pubspec.yaml was not found in the repository root."
+            echo "Make sure pubspec.yaml is in the main repository folder."
+            exit 1
+          fi
+          flutter --version
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Check code
+      - name: Analyze Flutter code
         run: flutter analyze
 
       - name: Build release APK
