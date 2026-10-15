@@ -3,7 +3,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await [Permission.camera, Permission.location, Permission.storage, Permission.manageExternalStorage].request();
+  runApp(MaterialApp(home: FlashApp()));
+}
 void main() => runApp(MaterialApp(home: FlashApp(), debugShowCheckedModeBanner: false));
 
 class FlashApp extends StatefulWidget { @override _FlashAppState createState() => _FlashAppState(); }
