@@ -1,36 +1,66 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'hotspot_controller.dart';
 
-class SendScreen extends StatelessWidget {
+class SendScreen extends StatefulWidget {
   const SendScreen({super.key});
+  @override
+  State<SendScreen> createState() => _SendScreenState();
+}
+
+class _SendScreenState extends State<SendScreen> {
+  String? qrData;
+  String? ssid;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      var info = await HotspotController.startHotspot();
+      setState(() {
+        qrData = info["qr"];
+        ssid = info["ssid"];
+      });
+    } catch (e) {
+      setState(() => qrData = "ERROR");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Wannan ne bayanan da zasu hada wayoyin direct
-    // Daga baya zamu mayar da shi da hotspot na zahiri
-    String qrData = "WIFI:S:FLASH-${DateTime.now().millisecond};T:WPA;P:12345678;;";
-
     return Scaffold(
       backgroundColor: const Color(0xFF12121A),
-      appBar: AppBar(backgroundColor: Colors.transparent, title: const Text("Send")),
+      appBar: AppBar(backgroundColor: Colors.transparent, title: Text(ssid?? "Ana kunnawa...")),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text("Bari abokinka ya scan wannan", style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-              child: QrImageView(data: qrData, version: QrVersions.auto, size: 220),
-            ),
-            const SizedBox(height: 30),
-            const CircularProgressIndicator(color: Colors.blue),
-            const SizedBox(height: 10),
-            const Text("Ana kunna Hotspot 5GHz...", style: TextStyle(color: Colors.white54)),
-          ],
-        ),
+        child: qrData == null
+       ? const CircularProgressIndicator()
+        : qrData == "ERROR"
+       ? const Text("Bai iya kunna Hotspot ba, ka bawa app Location permission a Setting")
+        : Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                child: QrImageView(data: qrData!, size: 240),
+              ),
+              const SizedBox(height: 20),
+              Text("Hotspot: $ssid", style: const TextStyle(color: Colors.white)),
+              const SizedBox(height: 10),
+              const Text("Bari abokinka ya scan", style: TextStyle(color: Colors.white54)),
+            ],
+          ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    HotspotController.stopHotspot();
+    super.dispose();
   }
 }
