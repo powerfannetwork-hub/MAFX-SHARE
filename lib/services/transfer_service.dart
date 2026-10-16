@@ -13,24 +13,36 @@ class TransferService {
   static final TransferService instance = TransferService._();
 
   static const String _historyKey = 'mafx_transfer_history';
+  static const int _maxHistoryEntries = 100;
+
+  static const Duration _connectionTimeout = Duration(seconds: 5);
+  static const Duration _sendConnectionTimeout = Duration(seconds: 15);
+  static const Duration _transferTimeout = Duration(minutes: 10);
 
   HttpServer? _server;
   String? _sessionToken;
 
   bool get isServerRunning => _server != null;
+
   String? get sessionToken => _sessionToken;
+
   int? get port => _server?.port;
 
   Future<int> startReceiver() async {
-    if (_server != null) return _server!.port;
+    final existingServer = _server;
+
+    if (existingServer != null) {
+      return existingServer.port;
+    }
 
     final random = Random.secure();
-    final token = List<int>.generate(
+
+    final tokenBytes = List<int>.generate(
       32,
       (_) => random.nextInt(256),
     );
 
-    _sessionToken = base64UrlEncode(token).replaceAll('=', '');
+    final token = base64UrlEncode(tokenBytes).replaceAll('=', '');
 
     final server = await HttpServer.bind(
       InternetAddress.anyIPv4,
@@ -38,8 +50,14 @@ class TransferService {
       shared: false,
     );
 
+    _sessionToken = token;
     _server = server;
+
     unawaited(_handleRequests(server));
+
+    debugPrint(
+      'MAFX SHARE receiver started on port ${server.port}',
+    );
 
     return server.port;
   }
@@ -50,13 +68,7 @@ class TransferService {
         try {
           if (request.method == 'GET' &&
               request.uri.path == '/health') {
-            request.response.headers.contentType = ContentType.json;
-            request.response.write(jsonEncode({
-              'app': 'MAFX_SHARE',
-              'status': 'ready',
-              'version': 1,
-            }));
-            await request.response.close();
+            await _handleHealthCheck(request);
             continue;
           }
 
@@ -68,65 +80,137 @@ class TransferService {
 
           request.response.statusCode = HttpStatus.notFound;
           request.response.headers.contentType = ContentType.json;
-          request.response.write(jsonEncode({
-            'error': 'Endpoint not found',
-          }));
+          request.response.write(
+            jsonEncode({
+              'success': false,
+              'error': 'Endpoint not found',
+            }),
+          );
+
           await request.response.close();
-        } catch (error) {
+        } catch (error, stackTrace) {
           debugPrint('MAFX SHARE request error: $error');
-          if (!request.response.headersSent) {
-            request.response.statusCode = HttpStatus.internalServerError;
-            request.response.write('Transfer failed');
-          }
+          debugPrintStack(stackTrace: stackTrace);
+
           try {
+            if (!request.response.headersSent) {
+              request.response.statusCode =
+                  HttpStatus.internalServerError;
+
+              request.response.headers.contentType =
+                  ContentType.json;
+
+              request.response.write(
+                jsonEncode({
+                  'success': false,
+                  'error': 'Transfer failed',
+                }),
+              );
+            }
+
             await request.response.close();
-          } catch (_) {}
+          } catch (closeError) {
+            debugPrint(
+              'Unable to close failed response: $closeError',
+            );
+          }
         }
       }
     } catch (error, stackTrace) {
       debugPrint('MAFX SHARE server error: $error');
       debugPrintStack(stackTrace: stackTrace);
+    } finally {
+      if (identical(_server, server)) {
+        _server = null;
+        _sessionToken = null;
+      }
+
+      debugPrint('MAFX SHARE receiver stopped.');
     }
   }
 
+  Future<void> _handleHealthCheck(HttpRequest request) async {
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+
+    request.response.write(
+      jsonEncode({
+        'app': 'MAFX_SHARE',
+        'status': 'ready',
+        'version': 1,
+      }),
+    );
+
+    await request.response.close();
+  }
+
   Future<void> _receiveFile(HttpRequest request) async {
-    if (_sessionToken == null ||
-        request.headers.value('x-mafx-token') != _sessionToken) {
+    final activeToken = _sessionToken;
+
+    if (activeToken == null ||
+        request.headers.value('x-mafx-token') != activeToken) {
       request.response.statusCode = HttpStatus.unauthorized;
-      request.response.write('Invalid session token');
+      request.response.headers.contentType = ContentType.json;
+
+      request.response.write(
+        jsonEncode({
+          'success': false,
+          'error': 'Invalid session token',
+        }),
+      );
+
       await request.response.close();
       return;
     }
 
     final rawName = request.headers.value('x-file-name');
+
     if (rawName == null || rawName.trim().isEmpty) {
       request.response.statusCode = HttpStatus.badRequest;
-      request.response.write('Missing file name');
+      request.response.headers.contentType = ContentType.json;
+
+      request.response.write(
+        jsonEncode({
+          'success': false,
+          'error': 'Missing file name',
+        }),
+      );
+
       await request.response.close();
       return;
     }
 
-    final fileName = rawName
-        .replaceAll('\\', '/')
-        .split('/')
-        .last
-        .replaceAll(RegExp(r'[\x00-\x1F]'), '_')
-        .trim();
+    final fileName = _sanitizeFileName(rawName);
 
     if (fileName.isEmpty || fileName == '.' || fileName == '..') {
       request.response.statusCode = HttpStatus.badRequest;
-      request.response.write('Invalid file name');
+      request.response.headers.contentType = ContentType.json;
+
+      request.response.write(
+        jsonEncode({
+          'success': false,
+          'error': 'Invalid file name',
+        }),
+      );
+
       await request.response.close();
       return;
     }
 
     final directory = await getApplicationDocumentsDirectory();
-    final safeName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
-    final file = File('${directory.path}/$safeName');
+
+    final timestamp = DateTime.now().microsecondsSinceEpoch;
+    final safeName = '${timestamp}_$fileName';
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}$safeName',
+    );
+
+    var completed = false;
 
     try {
       final sink = file.openWrite();
-      await request.pipe(sink);
+
+      await request.pipe(sink).timeout(_transferTimeout);
 
       final bytes = await file.length();
 
@@ -138,18 +222,67 @@ class TransferService {
 
       request.response.statusCode = HttpStatus.created;
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({
-        'success': true,
-        'fileName': fileName,
-        'bytes': bytes,
-      }));
+
+      request.response.write(
+        jsonEncode({
+          'success': true,
+          'fileName': fileName,
+          'bytes': bytes,
+        }),
+      );
+
       await request.response.close();
-    } catch (_) {
-      if (await file.exists()) {
-        await file.delete();
+
+      completed = true;
+
+      debugPrint(
+        'MAFX SHARE received $fileName ($bytes bytes)',
+      );
+    } catch (error) {
+      debugPrint('Failed to receive $fileName: $error');
+
+      if (!request.response.headersSent) {
+        request.response.statusCode =
+            HttpStatus.internalServerError;
+
+        request.response.headers.contentType = ContentType.json;
+
+        request.response.write(
+          jsonEncode({
+            'success': false,
+            'error': 'Unable to receive file',
+          }),
+        );
+
+        try {
+          await request.response.close();
+        } catch (_) {}
       }
+
       rethrow;
+    } finally {
+      if (!completed) {
+        try {
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (error) {
+          debugPrint(
+            'Unable to remove incomplete file: $error',
+          );
+        }
+      }
     }
+  }
+
+  String _sanitizeFileName(String rawName) {
+    final normalized = rawName.replaceAll('\\', '/');
+    final name = normalized.split('/').last.trim();
+
+    return name.replaceAll(
+      RegExp(r'[\x00-\x1F<>:"|?*]'),
+      '_',
+    );
   }
 
   Future<bool> checkReceiver(String baseUrl) async {
@@ -157,23 +290,34 @@ class TransferService {
 
     try {
       final uri = Uri.parse(baseUrl);
-      if (uri.scheme != 'http' && uri.scheme != 'https') {
+
+      if ((uri.scheme != 'http' && uri.scheme != 'https') ||
+          uri.host.isEmpty) {
         return false;
       }
 
       client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 5);
+        ..connectionTimeout = _connectionTimeout;
 
-      final request = await client.getUrl(uri.resolve('/health'));
-      final response = await request.close().timeout(
-        const Duration(seconds: 5),
-      );
+      final request = await client
+          .getUrl(uri.resolve('/health'))
+          .timeout(_connectionTimeout);
 
-      final body = await utf8.decoder.bind(response).join();
+      final response = await request
+          .close()
+          .timeout(_connectionTimeout);
 
-      if (response.statusCode != HttpStatus.ok) return false;
+      final body = await utf8.decoder
+          .bind(response)
+          .join()
+          .timeout(_connectionTimeout);
+
+      if (response.statusCode != HttpStatus.ok) {
+        return false;
+      }
 
       final decoded = jsonDecode(body);
+
       return decoded is Map &&
           decoded['app'] == 'MAFX_SHARE' &&
           decoded['status'] == 'ready' &&
@@ -192,6 +336,7 @@ class TransferService {
     required int bytes,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+
     final entries = prefs.getStringList(_historyKey) ?? [];
 
     entries.insert(
@@ -204,8 +349,11 @@ class TransferService {
       }),
     );
 
-    if (entries.length > 100) {
-      entries.removeRange(100, entries.length);
+    if (entries.length > _maxHistoryEntries) {
+      entries.removeRange(
+        _maxHistoryEntries,
+        entries.length,
+      );
     }
 
     await prefs.setStringList(_historyKey, entries);
@@ -213,59 +361,91 @@ class TransferService {
 
   Future<void> stopReceiver() async {
     final server = _server;
+
     _server = null;
     _sessionToken = null;
 
     if (server != null) {
       await server.close(force: true);
+      debugPrint('MAFX SHARE receiver closed.');
     }
   }
 
-  Future<void> dispose() => stopReceiver();
+  Future<void> dispose() async {
+    await stopReceiver();
+  }
+
   Future<bool> sendFile({
-  required String receiverUrl,
-  required String token,
-  required String filePath,
-  required String fileName,
-}) async {
-  final file = File(filePath);
+    required String receiverUrl,
+    required String token,
+    required String filePath,
+    required String fileName,
+  }) async {
+    final file = File(filePath);
 
-  if (!await file.exists()) {
-    throw Exception('File not found: $fileName');
-  }
-
-  final client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 15);
-
-  try {
-    final uri = Uri.parse(receiverUrl).resolve('/upload');
-    final request = await client.postUrl(uri);
-
-    request.headers.set('x-mafx-token', token);
-    request.headers.set('x-file-name', fileName);
-    request.headers.contentType = ContentType.binary;
-    request.contentLength = await file.length();
-
-    await request.addStream(file.openRead());
-
-    final response = await request.close().timeout(
-      const Duration(minutes: 10),
-    );
-
-    final body = await response.transform(utf8.decoder).join();
-
-    if (response.statusCode != HttpStatus.created) {
-      throw Exception('Transfer failed: $body');
+    if (!await file.exists()) {
+      throw Exception('File not found: $fileName');
     }
 
-    await recordTransfer(
-      fileName: fileName,
-      direction: 'sent',
-      bytes: await file.length(),
-    );
+    final safeName = _sanitizeFileName(fileName);
 
-    return true;
-  } finally {
-    client.close(force: true);
+    if (safeName.isEmpty || safeName == '.' || safeName == '..') {
+      throw Exception('Invalid file name: $fileName');
+    }
+
+    final baseUri = Uri.parse(receiverUrl);
+
+    if ((baseUri.scheme != 'http' &&
+            baseUri.scheme != 'https') ||
+        baseUri.host.isEmpty) {
+      throw Exception('Invalid receiver address.');
+    }
+
+    final uri = baseUri.resolve('/upload');
+
+    final client = HttpClient()
+      ..connectionTimeout = _sendConnectionTimeout;
+
+    try {
+      final request = await client
+          .postUrl(uri)
+          .timeout(_sendConnectionTimeout);
+
+      request.headers.set('x-mafx-token', token);
+      request.headers.set('x-file-name', safeName);
+      request.headers.contentType = ContentType.binary;
+      request.contentLength = await file.length();
+
+      await request.addStream(file.openRead());
+
+      final response = await request
+          .close()
+          .timeout(_transferTimeout);
+
+      final body = await response.transform(utf8.decoder).join();
+
+      if (response.statusCode != HttpStatus.created) {
+        throw Exception(
+          'Transfer failed with status '
+          '${response.statusCode}: $body',
+        );
+      }
+
+      final bytes = await file.length();
+
+      await recordTransfer(
+        fileName: safeName,
+        direction: 'sent',
+        bytes: bytes,
+      );
+
+      debugPrint(
+        'MAFX SHARE sent $safeName ($bytes bytes)',
+      );
+
+      return true;
+    } finally {
+      client.close(force: true);
+    }
   }
 }
