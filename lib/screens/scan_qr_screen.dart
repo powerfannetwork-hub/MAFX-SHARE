@@ -27,34 +27,33 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
     for (final barcode in capture.barcodes) {
       final value = barcode.rawValue;
-
       if (value == null || value.isEmpty) continue;
 
       try {
         final decoded = jsonDecode(value);
 
-        if (decoded is! Map<String, dynamic>) {
-          continue;
-        }
+        if (decoded is! Map<String, dynamic>) continue;
 
-        if (decoded['app'] != 'MAFX_SHARE' ||
-            decoded['version'] != 1 ||
-            decoded['session'] is! String ||
-            !['STANDARD', '5G_PLUS'].contains(decoded['mode'])) {
-          continue;
-        }
+        final valid = decoded['app'] == 'MAFX_SHARE' &&
+            decoded['version'] == 1 &&
+            decoded['ip'] is String &&
+            decoded['ip'].toString().isNotEmpty &&
+            decoded['port'] is int &&
+            decoded['token'] is String &&
+            decoded['token'].toString().isNotEmpty &&
+            ['STANDARD', '5G_PLUS'].contains(decoded['mode']);
+
+        if (!valid) continue;
 
         _hasScanned = true;
         _controller.stop();
 
         if (!mounted) return;
 
-        Navigator.of(context).pop<Map<String, dynamic>>(
-          decoded,
-        );
+        Navigator.of(context).pop<Map<String, dynamic>>(decoded);
         return;
       } catch (_) {
-        // Ignore QR codes that do not contain valid MAFX SHARE data.
+        // Ignore invalid QR codes.
       }
     }
   }
@@ -67,12 +66,12 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         actions: [
           IconButton(
             tooltip: 'Switch camera',
-            icon: const Icon(Icons.cameraswitch_rounded),
+            icon: const Icon(Icons.cameraswitch),
             onPressed: () => _controller.switchCamera(),
           ),
           IconButton(
-            tooltip: 'Toggle flashlight',
-            icon: const Icon(Icons.flash_on_rounded),
+            tooltip: 'Flashlight',
+            icon: const Icon(Icons.flash_on),
             onPressed: () => _controller.toggleTorch(),
           ),
         ],
@@ -100,24 +99,16 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                     ),
                   ),
                 ),
-                Positioned(
+                const Positioned(
                   bottom: 30,
                   left: 24,
                   right: 24,
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Text(
-                      'Point your camera at the QR code '
-                      'displayed on the sending phone.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white,
-                        height: 1.4,
-                      ),
+                  child: Text(
+                    'Point the camera at the receiver QR code.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      backgroundColor: Colors.black54,
                     ),
                   ),
                 ),
@@ -127,11 +118,8 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
           const Padding(
             padding: EdgeInsets.all(18),
             child: Text(
-              'Only valid MAFX SHARE QR codes are accepted.',
+              'Scan a valid MAFX SHARE connection QR code.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.blueGrey,
-              ),
             ),
           ),
         ],
