@@ -35,7 +35,7 @@ jobs:
         run: |
           set -e
 
-          echo "=== PROJECT STRUCTURE ==="
+          echo "========== PROJECT STRUCTURE =========="
 
           for FILE in \
             pubspec.yaml \
@@ -59,114 +59,92 @@ jobs:
       - name: Get Flutter dependencies
         run: flutter pub get
 
-      - name: Analyze Flutter code
-        run: flutter analyze --no-pub
-
-      - name: Diagnose Android V1 Embedding
-        id: diagnose
+      - name: Scan for Android V1 Embedding
+        if: always()
         shell: bash
         run: |
           echo "=========================================="
-          echo " MAFX SHARE - ANDROID ERROR DIAGNOSTICS"
+          echo " MAFX SHARE - V1 EMBEDDING SCAN"
           echo "=========================================="
 
-          REPORT="$RUNNER_TEMP/android-diagnostics.txt"
-          : > "$REPORT"
-
-          FOUND=0
+          REPORT="$RUNNER_TEMP/embedding-report.txt"
+          touch "$REPORT"
 
           echo ""
-          echo "=== 1. SEARCHING PROJECT SOURCE FILES ==="
-
-          if git grep -n -I -E \
-            'io\.flutter\.app\.FlutterActivity|io\.flutter\.app\.FlutterApplication|io\.flutter\.app\.FlutterActivityDelegate|io\.flutter\.view\.FlutterMain|io\.flutter\.view\.FlutterNativeView|PluginRegistry\.Registrar' \
-            -- '*.kt' '*.java' '*.xml' '*.gradle' '*.gradle.kts' '*.dart' '*.yaml' '*.yml' \
-            > "$RUNNER_TEMP/v1-matches.txt"; then
-
-            cat "$RUNNER_TEMP/v1-matches.txt"
-
-            while IFS= read -r MATCH; do
-              echo "POSSIBLE V1 EMBEDDING: $MATCH" | tee -a "$REPORT"
-              FOUND=1
-            done < "$RUNNER_TEMP/v1-matches.txt"
-
-          else
-            echo "No common V1 embedding references found."
-          fi
-
-          echo ""
-          echo "=== 2. FINDING ANDROID ENTRY POINTS ==="
+          echo "========== MAIN ACTIVITY FILES =========="
 
           find android -type f \
             \( -name 'MainActivity.kt' -o -name 'MainActivity.java' \) \
             -print | tee -a "$REPORT"
 
           echo ""
-          echo "=== 3. CHECKING ANDROID MANIFESTS ==="
+          echo "========== SEARCHING SOURCE FILES =========="
 
-          while IFS= read -r -d '' FILE; do
-            echo "Checking: $FILE"
-
-            if grep -n -E \
-              'io\.flutter\.app\.FlutterActivity|io\.flutter\.app\.FlutterApplication|io\.flutter\.app\.android\.SplashScreenUntilFirstFrame' \
-              "$FILE"; then
-
-              echo "ERROR: Legacy embedding reference in $FILE" \
-                | tee -a "$REPORT"
-
-              FOUND=1
-            fi
-          done < <(find android -name AndroidManifest.xml -print0)
+          grep -RInE \
+            --include='*.kt' \
+            --include='*.java' \
+            --include='*.xml' \
+            --include='*.gradle' \
+            --include='*.gradle.kts' \
+            --include='*.dart' \
+            --exclude-dir=.git \
+            --exclude-dir=build \
+            --exclude-dir=.gradle \
+            --exclude-dir=.dart_tool \
+            'io\.flutter\.app\.FlutterActivity|io\.flutter\.app\.FlutterApplication|io\.flutter\.app\.FlutterActivityDelegate|io\.flutter\.view\.FlutterMain|io\.flutter\.view\.FlutterNativeView|PluginRegistry\.Registrar' \
+            . 2>/dev/null | tee -a "$REPORT" || true
 
           echo ""
-          echo "=== 4. CHECKING FLUTTER EMBEDDING VERSION ==="
+          echo "========== ANDROID MANIFEST FILES =========="
 
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          find . -type f \
+            -name AndroidManifest.xml \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -print | tee -a "$REPORT"
 
-          if [ -f "$MANIFEST" ]; then
-            grep -n -A 2 -B 2 'flutterEmbedding' "$MANIFEST" \
-              || echo "WARNING: flutterEmbedding metadata not found"
+          echo ""
+          echo "========== EMBEDDING METADATA =========="
+
+          if [ -f android/app/src/main/AndroidManifest.xml ]; then
+            grep -n -A 3 -B 3 'flutterEmbedding' \
+              android/app/src/main/AndroidManifest.xml || true
           fi
 
           echo ""
-          echo "=== 5. CHECKING DEPENDENCY FILES ==="
+          echo "========== PLUGIN DEPENDENCIES =========="
 
           if [ -f .flutter-plugins-dependencies ]; then
             python3 - <<'PY'
           import json
 
-          path = ".flutter-plugins-dependencies"
+          filename = ".flutter-plugins-dependencies"
 
-          try:
-              with open(path, encoding="utf-8") as f:
-                  data = json.load(f)
+          with open(filename, encoding="utf-8") as file:
+              data = json.load(file)
 
-              for plugin in data.get("plugins", {}).get("android", []):
+          for platform in ("android",):
+              for plugin in data.get("plugins", {}).get(platform, []):
                   print(
-                      "PLUGIN:",
-                      plugin.get("name", "unknown"),
-                      "| PATH:",
-                      plugin.get("path", "unknown")
+                      "Plugin:", plugin.get("name", "unknown"),
+                      "| Path:", plugin.get("path", "unknown")
                   )
-          except Exception as error:
-              print("Could not parse plugin metadata:", error)
           PY
           else
-            echo "No .flutter-plugins-dependencies file found."
+            echo "Flutter plugin metadata not found."
           fi
 
           echo ""
-          echo "=== DIAGNOSTIC SUMMARY ==="
+          echo "========== SCAN FINISHED =========="
 
-          if [ "$FOUND" -eq 1 ]; then
-            echo "Possible legacy embedding references were found."
-            echo "Inspect the file paths and line numbers above."
-          else
-            echo "No common V1 embedding references found in tracked source files."
-            echo "The build log may be needed to identify the exact cause."
-          fi
-
-          echo "Diagnostics finished."
+      - name: Analyze Flutter code
+        id: analyze
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --no-pub 2>&1 \
+            | tee "$RUNNER_TEMP/flutter-analyze.log"
 
       - name: Build release APK
         id: build_apk
@@ -177,32 +155,35 @@ jobs:
           flutter build apk \
             --release \
             --target-platform android-arm64 \
-            --verbose 2>&1 | tee "$RUNNER_TEMP/flutter-build.log"
+            --verbose 2>&1 \
+            | tee "$RUNNER_TEMP/flutter-build.log"
 
-      - name: Diagnose failed APK build
-        if: failure() && steps.build_apk.outcome == 'failure'
+      - name: Report Flutter Build Error
+        if: failure()
         shell: bash
         run: |
           echo "=========================================="
-          echo " APK BUILD FAILED - ERROR REPORT"
+          echo " MAFX SHARE - BUILD ERROR REPORT"
           echo "=========================================="
 
-          LOG="$RUNNER_TEMP/flutter-build.log"
+          for LOG in \
+            "$RUNNER_TEMP/flutter-analyze.log" \
+            "$RUNNER_TEMP/flutter-build.log"
+          do
+            if [ -f "$LOG" ]; then
+              echo ""
+              echo "========== $LOG =========="
 
-          if [ -f "$LOG" ]; then
-            echo ""
-            echo "=== ERROR MESSAGES ==="
+              grep -n -i -B 5 -A 8 -E \
+                'deleted Android v1 embedding|error:|exception|caused by:|failed|\.kt:[0-9]+|\.java:[0-9]+' \
+                "$LOG" | tail -n 200 || true
 
-            grep -n -i -B 5 -A 8 -E \
-              'deleted Android v1 embedding|error:|exception|failed|caused by:|\.kt:[0-9]+|\.java:[0-9]+' \
-              "$LOG" | tail -n 250 || true
+              echo ""
+              echo "========== LAST 100 LINES =========="
 
-            echo ""
-            echo "=== LAST 150 LOG LINES ==="
-            tail -n 150 "$LOG"
-          else
-            echo "Flutter build log was not created."
-          fi
+              tail -n 100 "$LOG"
+            fi
+          done
 
       - name: Verify APK
         if: success()
@@ -213,20 +194,23 @@ jobs:
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created: $APK"
+            echo "ERROR: APK file not found: $APK"
             exit 1
           fi
 
-          echo "=== APK INFORMATION ==="
+          echo "========== APK INFORMATION =========="
+
           ls -lh "$APK"
           file "$APK"
 
           echo ""
-          echo "=== SHA-256 ==="
+          echo "========== SHA-256 =========="
+
           sha256sum "$APK"
 
           echo ""
-          echo "=== APK ARCHIVE VALIDATION ==="
+          echo "========== VERIFY APK ARCHIVE =========="
+
           unzip -t "$APK"
 
       - name: Upload APK
@@ -238,13 +222,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload diagnostic log
+      - name: Upload Diagnostic Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: MAFX-SHARE-diagnostic-log
+          name: MAFX-SHARE-diagnostic-logs
           path: |
+            ${{ runner.temp }}/embedding-report.txt
+            ${{ runner.temp }}/flutter-analyze.log
             ${{ runner.temp }}/flutter-build.log
-            ${{ runner.temp }}/android-diagnostics.txt
           if-no-files-found: ignore
           retention-days: 7
