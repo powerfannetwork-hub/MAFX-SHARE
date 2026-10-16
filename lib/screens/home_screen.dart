@@ -1,12 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
-import 'send_screen.dart';
-import 'receive_screen.dart';
 import 'connect_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
+
+  void _openConnection(
+    BuildContext context, {
+    String? category,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ConnectScreen(category: category),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -115,12 +125,7 @@ class HomeScreen extends StatelessWidget {
                             subtitle: 'Send files',
                             icon: Icons.send_rounded,
                             color: AppTheme.green,
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const SendScreen(),
-                              ),
-                            ),
+                            onTap: () => _openConnection(context),
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -130,12 +135,7 @@ class HomeScreen extends StatelessWidget {
                             subtitle: 'Receive files',
                             icon: Icons.download_rounded,
                             color: AppTheme.blue,
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const ReceiveScreen(),
-                              ),
-                            ),
+                            onTap: () => _openConnection(context),
                           ),
                         ),
                       ],
@@ -246,12 +246,7 @@ class HomeScreen extends StatelessWidget {
                           ),
                         ),
                         IconButton(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const ConnectScreen(),
-                            ),
-                          ),
+                          onPressed: () => _openConnection(context),
                           icon: const Icon(
                             Icons.arrow_forward_rounded,
                             color: AppTheme.green,
@@ -376,61 +371,62 @@ class _CategoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        onTap: () {
-          if (title == 'Connect') {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const ConnectScreen(),
-              ),
-            );
-          } else {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => SendScreen(category: title),
-              ),
-            );
-          }
-        },
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          decoration: BoxDecoration(
+    return Builder(
+      builder: (context) {
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            onTap: () {
+              _openCategory(context);
+            },
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: const Color(0xFFE5EDF4),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: const Color(0xFFE5EDF4),
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.13),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      icon,
+                      color: color,
+                      size: 27,
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.13),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  icon,
-                  color: color,
-                  size: 27,
-                ),
-              ),
-              const SizedBox(height: 9),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
+        );
+      },
+    );
+  }
+
+  void _openCategory(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ConnectScreen(
+          category: title == 'Connect' ? null : title,
         ),
       ),
     );
