@@ -80,6 +80,7 @@ class TransferService {
 
           request.response.statusCode = HttpStatus.notFound;
           request.response.headers.contentType = ContentType.json;
+
           request.response.write(
             jsonEncode({
               'success': false,
@@ -93,20 +94,17 @@ class TransferService {
           debugPrintStack(stackTrace: stackTrace);
 
           try {
-            if (!request.response.headersSent) {
-              request.response.statusCode =
-                  HttpStatus.internalServerError;
+            request.response.statusCode =
+                HttpStatus.internalServerError;
 
-              request.response.headers.contentType =
-                  ContentType.json;
+            request.response.headers.contentType = ContentType.json;
 
-              request.response.write(
-                jsonEncode({
-                  'success': false,
-                  'error': 'Transfer failed',
-                }),
-              );
-            }
+            request.response.write(
+              jsonEncode({
+                'success': false,
+                'error': 'Transfer failed',
+              }),
+            );
 
             await request.response.close();
           } catch (closeError) {
@@ -201,16 +199,24 @@ class TransferService {
 
     final timestamp = DateTime.now().microsecondsSinceEpoch;
     final safeName = '${timestamp}_$fileName';
+
     final file = File(
       '${directory.path}${Platform.pathSeparator}$safeName',
     );
 
     var completed = false;
+    IOSink? sink;
 
     try {
-      final sink = file.openWrite();
+      sink = file.openWrite();
 
-      await request.pipe(sink).timeout(_transferTimeout);
+      // Rubuta bayanan da ake karɓa zuwa fayil ɗin.
+      // addStream yana jiran rubutun ya kammala.
+      await sink.addStream(request).timeout(_transferTimeout);
+
+      await sink.flush();
+      await sink.close();
+      sink = null;
 
       final bytes = await file.length();
 
@@ -241,7 +247,13 @@ class TransferService {
     } catch (error) {
       debugPrint('Failed to receive $fileName: $error');
 
-      if (!request.response.headersSent) {
+      try {
+        await sink?.close();
+      } catch (closeError) {
+        debugPrint('Unable to close file sink: $closeError');
+      }
+
+      try {
         request.response.statusCode =
             HttpStatus.internalServerError;
 
@@ -254,9 +266,11 @@ class TransferService {
           }),
         );
 
-        try {
-          await request.response.close();
-        } catch (_) {}
+        await request.response.close();
+      } catch (responseError) {
+        debugPrint(
+          'Unable to send transfer error response: $responseError',
+        );
       }
 
       rethrow;
