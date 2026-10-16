@@ -13,7 +13,7 @@ jobs:
         with:
           flutter-version: '3.24.5'
           channel: 'stable'
-      - run: rm -rf android ios web
+      - run: rm -rf android
       - run: flutter create. --project-name mafx_share --org com.mafx.share --platforms android
       - run: flutter pub get
       - run: flutter build apk --debug
