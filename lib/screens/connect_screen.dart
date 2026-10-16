@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,7 +8,12 @@ import 'scan_qr_screen.dart';
 import 'send_screen.dart';
 
 class ConnectScreen extends StatefulWidget {
-  const ConnectScreen({super.key});
+  final String? category;
+
+  const ConnectScreen({
+    super.key,
+    this.category,
+  });
 
   @override
   State<ConnectScreen> createState() => _ConnectScreenState();
@@ -23,11 +27,15 @@ class _ConnectScreenState extends State<ConnectScreen> {
   bool _connected = false;
 
   String _mode = 'STANDARD';
-  String _status = 'Start your receiver to begin connecting.';
+  String _status = 'Start the receiver to begin connecting.';
+
   String? _peerIp;
+  String? _peerUrl;
+  String? _peerToken;
+
   int? _localPort;
 
-  String? get _token => _service.sessionToken;
+  String? get _localToken => _service.sessionToken;
 
   Future<String?> _getLocalIp() async {
     try {
@@ -63,7 +71,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   Future<void> _startReceiver() async {
-    if (_loading) return;
+    if (_loading || _receiverStarted) return;
 
     setState(() {
       _loading = true;
@@ -76,13 +84,14 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
       if (!mounted) return;
 
-      if (ip == null || _token == null) {
+      if (ip == null || _localToken == null) {
         setState(() {
-          _status = 'Could not find a local IP address.';
+          _status =
+              'Could not find your local IP address or receiver token.';
         });
 
         _showMessage(
-          'Connect this phone to Wi-Fi or a hotspot and try again.',
+          'Connect this phone to Wi-Fi or a hotspot, then try again.',
         );
         return;
       }
@@ -90,7 +99,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
       setState(() {
         _receiverStarted = true;
         _localPort = port;
-        _status = 'Receiver is ready. Scan the other phone QR code.';
+        _status =
+            'Receiver is ready. Now connect to the other phone.';
       });
 
       _showMessage('Receiver started successfully.');
@@ -98,7 +108,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
       if (!mounted) return;
 
       setState(() {
-        _status = 'Could not start receiver: $error';
+        _status = 'Could not start receiver.';
       });
 
       _showMessage('Unable to start receiver: $error');
@@ -112,7 +122,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   Future<void> _showMyQr() async {
-    if (!_receiverStarted || _localPort == null || _token == null) {
+    if (!_receiverStarted ||
+        _localPort == null ||
+        _localToken == null) {
       _showMessage('Start the receiver first.');
       return;
     }
@@ -123,7 +135,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (ip == null) {
       _showMessage(
-        'Could not find the phone IP address. Check your Wi-Fi.',
+        'Could not find the phone IP address. Check your network.',
       );
       return;
     }
@@ -134,7 +146,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
         builder: (_) => QrScreen(
           ipAddress: ip,
           port: _localPort!,
-          token: _token!,
+          token: _localToken!,
           mode: _mode,
         ),
       ),
@@ -143,7 +155,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   Future<void> _scanPeerQr() async {
     if (!_receiverStarted) {
-      _showMessage('Start the receiver before scanning a QR code.');
+      _showMessage('Start your receiver before scanning.');
       return;
     }
 
@@ -158,21 +170,21 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (!mounted || result == null) return;
 
-    final ip = result['ip'] as String?;
-    final port = result['port'] as int?;
-    final token = result['token'] as String?;
     final app = result['app'];
     final version = result['version'];
+    final ip = result['ip'];
+    final port = result['port'];
+    final token = result['token'];
 
     if (app != 'MAFX_SHARE' ||
         version != 1 ||
-        ip == null ||
-        ip.isEmpty ||
-        port == null ||
+        ip is! String ||
+        ip.trim().isEmpty ||
+        port is! int ||
         port < 1 ||
         port > 65535 ||
-        token == null ||
-        token.isEmpty) {
+        token is! String ||
+        token.trim().isEmpty) {
       _showMessage('The QR code is invalid.');
       return;
     }
@@ -181,23 +193,24 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     setState(() {
       _loading = true;
+      _connected = false;
       _status = 'Checking the other phone...';
     });
 
     try {
-      final connected = await _service.checkReceiver(peerUrl);
+      final isReachable = await _service.checkReceiver(peerUrl);
 
       if (!mounted) return;
 
-      if (!connected) {
+      if (!isReachable) {
         setState(() {
-          _connected = false;
-          _status = 'Connection failed. Try scanning again.';
+          _status = 'Connection failed. Try again.';
         });
 
         _showMessage(
-          'Could not connect. Make sure both phones use the same '
-          'Wi-Fi or hotspot and that the other receiver is running.',
+          'Cannot reach the other phone. Make sure both phones '
+          'are connected to the same Wi-Fi or hotspot and that '
+          'the other receiver is running.',
         );
         return;
       }
@@ -205,7 +218,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
       setState(() {
         _connected = true;
         _peerIp = ip;
-        _status = 'Connection successful. You can choose files now.';
+        _peerUrl = peerUrl;
+        _peerToken = token;
+        _status =
+            'Connection verified. You can now choose files to send.';
       });
 
       _showMessage('Connection successful!');
@@ -214,7 +230,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
       setState(() {
         _connected = false;
-        _status = 'Connection failed.';
+        _status = 'Unable to connect to the other phone.';
       });
 
       _showMessage('Connection error: $error');
@@ -228,7 +244,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   Future<void> _chooseFiles() async {
-    if (!_connected) {
+    if (!_connected || _peerUrl == null || _peerToken == null) {
       _showMessage('Connect to the other phone first.');
       return;
     }
@@ -236,12 +252,18 @@ class _ConnectScreenState extends State<ConnectScreen> {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => const SendScreen(),
+        builder: (_) => SendScreen(
+          receiverUrl: _peerUrl!,
+          receiverToken: _peerToken!,
+          category: widget.category,
+        ),
       ),
     );
   }
 
   Future<void> _stopConnection() async {
+    if (_loading) return;
+
     await _service.stopReceiver();
 
     if (!mounted) return;
@@ -251,15 +273,12 @@ class _ConnectScreenState extends State<ConnectScreen> {
       _connected = false;
       _localPort = null;
       _peerIp = null;
-      _status = 'Connection stopped.';
+      _peerUrl = null;
+      _peerToken = null;
+      _status = 'Receiver stopped.';
     });
 
     _showMessage('Receiver stopped.');
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
   }
 
   @override
@@ -292,6 +311,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
+
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -300,7 +320,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 children: [
                   const Text(
                     'Connection mode',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
@@ -318,7 +340,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                         child: Text('5G+'),
                       ),
                     ],
-                    onChanged: _loading
+                    onChanged: _loading || _receiverStarted
                         ? null
                         : (value) {
                             if (value != null) {
@@ -332,7 +354,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
               ),
             ),
           ),
+
           const SizedBox(height: 16),
+
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -340,7 +364,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Step 1: Start receiver',
+                    'Step 1: Start your receiver',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
@@ -348,15 +372,17 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Start this phone receiver so the other phone can '
-                    'connect and send files to it.',
+                    'Both phones must start their receivers. '
+                    'This allows each phone to send and receive files.',
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
                       onPressed:
-                          _loading || _receiverStarted ? null : _startReceiver,
+                          _loading || _receiverStarted
+                              ? null
+                              : _startReceiver,
                       icon: const Icon(Icons.wifi_tethering),
                       label: Text(
                         _receiverStarted
@@ -380,7 +406,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
               ),
             ),
           ),
+
           const SizedBox(height: 12),
+
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -388,7 +416,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Step 2: Connect to the other phone',
+                    'Step 2: Scan the other phone',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
@@ -396,15 +424,18 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Both phones should start their receivers. Scan the '
-                    'QR code shown by the other phone.',
+                    'On both phones, scan the QR code displayed '
+                    'by the other phone. Each phone needs the '
+                    'other phone connection details.',
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed:
-                          _loading || !_receiverStarted ? null : _scanPeerQr,
+                          _loading || !_receiverStarted
+                              ? null
+                              : _scanPeerQr,
                       icon: const Icon(Icons.qr_code_scanner),
                       label: const Text('Scan Other Phone QR'),
                     ),
@@ -413,7 +444,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
               ),
             ),
           ),
+
           const SizedBox(height: 12),
+
           Card(
             color: _connected
                 ? Colors.green.withOpacity(0.08)
@@ -423,9 +456,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
               child: Column(
                 children: [
                   Icon(
-                    _connected ? Icons.check_circle : Icons.info_outline,
+                    _connected
+                        ? Icons.check_circle
+                        : Icons.info_outline,
                     size: 36,
-                    color: _connected ? Colors.green : Colors.blueGrey,
+                    color: _connected
+                        ? Colors.green
+                        : Colors.blueGrey,
                   ),
                   const SizedBox(height: 10),
                   Text(
@@ -434,7 +471,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   ),
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
-                    Text('Connected device: $_peerIp'),
+                    Text('Other phone: $_peerIp'),
                   ],
                   if (_loading) ...[
                     const SizedBox(height: 14),
@@ -444,17 +481,22 @@ class _ConnectScreenState extends State<ConnectScreen> {
               ),
             ),
           ),
+
           const SizedBox(height: 16),
+
           SizedBox(
             width: double.infinity,
             height: 52,
             child: FilledButton.icon(
-              onPressed: _connected && !_loading ? _chooseFiles : null,
+              onPressed:
+                  _connected && !_loading ? _chooseFiles : null,
               icon: const Icon(Icons.folder_open),
               label: const Text('Choose Files to Send'),
             ),
           ),
+
           const SizedBox(height: 12),
+
           if (_receiverStarted)
             SizedBox(
               width: double.infinity,
@@ -464,11 +506,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 label: const Text('Stop Receiver'),
               ),
             ),
+
           const SizedBox(height: 12),
+
           const Text(
-            'Important: Connect both phones to the same Wi-Fi or hotspot. '
-            'The 5G+ option is only a mode label and does not increase '
-            'network speed by itself.',
+            'Connect both phones to the same Wi-Fi or hotspot. '
+            'The 5G+ option is only a mode label and does not '
+            'increase network speed by itself.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12),
           ),
