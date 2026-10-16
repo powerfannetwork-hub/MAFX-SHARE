@@ -11,8 +11,12 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
+  static const String _historyKey = 'mafx_transfer_history';
+
   List<Map<String, dynamic>> history = [];
+
   bool isLoading = true;
+  bool isClearing = false;
 
   @override
   void initState() {
@@ -21,72 +25,141 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? data = prefs.getString('mafx_transfer_history');
-
-    List<Map<String, dynamic>> items = [];
-
-    if (data != null) {
-      try {
-        final decoded = jsonDecode(data);
-
-        if (decoded is List) {
-          items = decoded
-              .whereType<Map>()
-              .map((item) => Map<String, dynamic>.from(item))
-              .toList();
-        }
-      } catch (_) {
-        items = [];
-      }
+    if (mounted) {
+      setState(() {
+        isLoading = true;
+      });
     }
 
-    if (!mounted) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    setState(() {
-      history = items;
-      isLoading = false;
-    });
+      final entries = prefs.getStringList(_historyKey) ?? [];
+
+      final List<Map<String, dynamic>> items = [];
+
+      for (final entry in entries) {
+        try {
+          final decoded = jsonDecode(entry);
+
+          if (decoded is Map) {
+            items.add(
+              Map<String, dynamic>.from(decoded),
+            );
+          }
+        } catch (error) {
+          debugPrint(
+            'Failed to decode transfer history entry: $error',
+          );
+        }
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        history = items;
+        isLoading = false;
+      });
+    } catch (error) {
+      debugPrint('Failed to load transfer history: $error');
+
+      if (!mounted) return;
+
+      setState(() {
+        isLoading = false;
+      });
+
+      _showMessage(
+        'An kasa loda tarihin transfers. Ka sake gwadawa.',
+      );
+    }
   }
 
   Future<void> clearHistory() async {
+    if (isClearing || history.isEmpty) return;
+
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear History'),
-        content: const Text(
-          'Are you sure you want to clear all transfer history?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Clear Transfer History'),
+          content: const Text(
+            'Are you sure you want to delete all transfer history?',
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Clear'),
+            ),
+          ],
+        );
+      },
     );
 
-    if (confirm != true) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('mafx_transfer_history');
-
-    if (!mounted) return;
+    if (confirm != true || !mounted) return;
 
     setState(() {
-      history.clear();
+      isClearing = true;
     });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      await prefs.remove(_historyKey);
+
+      if (!mounted) return;
+
+      setState(() {
+        history.clear();
+        isClearing = false;
+      });
+
+      _showMessage('Transfer history cleared successfully.');
+    } catch (error) {
+      debugPrint('Failed to clear transfer history: $error');
+
+      if (!mounted) return;
+
+      setState(() {
+        isClearing = false;
+      });
+
+      _showMessage(
+        'An kasa share tarihin transfers. Ka sake gwadawa.',
+      );
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   String formatBytes(dynamic value) {
-    final bytes = (value is num) ? value.toDouble() : 0.0;
+    final int bytes;
+
+    if (value is num && value >= 0) {
+      bytes = value.toInt();
+    } else {
+      bytes = 0;
+    }
 
     if (bytes < 1024) {
-      return '${bytes.toInt()} B';
+      return '$bytes B';
     }
 
     if (bytes < 1024 * 1024) {
@@ -101,10 +174,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   String formatDate(dynamic value) {
-    if (value == null) return 'Unknown date';
+    if (value == null) {
+      return 'Unknown date';
+    }
 
     try {
-      final date = DateTime.parse(value.toString()).toLocal();
+      final date = DateTime.parse(
+        value.toString(),
+      ).toLocal();
 
       final day = date.day.toString().padLeft(2, '0');
       final month = date.month.toString().padLeft(2, '0');
@@ -119,6 +196,141 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  bool _wasSent(Map<String, dynamic> item) {
+    final direction = item['direction']?.toString().toLowerCase();
+
+    return direction == 'sent';
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.history_rounded,
+              size: 84,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'No Transfer History',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Your sent and received files will appear here after a transfer.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: loadHistory,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryItem(
+    Map<String, dynamic> item,
+  ) {
+    final fileName =
+        item['fileName']?.toString() ?? 'Unknown file';
+
+    final isSent = _wasSent(item);
+
+    final bytes = item['bytes'];
+
+    final completedAt = item['completedAt'];
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 10,
+        ),
+        leading: CircleAvatar(
+          child: Icon(
+            isSent
+                ? Icons.upload_rounded
+                : Icons.download_rounded,
+          ),
+        ),
+        title: Text(
+          fileName,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isSent
+                        ? Icons.arrow_upward_rounded
+                        : Icons.arrow_downward_rounded,
+                    size: 15,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    isSent ? 'Sent' : 'Received',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.storage_rounded,
+                    size: 15,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(formatBytes(bytes)),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.access_time_rounded,
+                    size: 15,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      formatDate(completedAt),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -126,14 +338,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
         title: const Text('Transfer History'),
         actions: [
           IconButton(
-            onPressed: loadHistory,
+            onPressed: isLoading ? null : loadHistory,
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
+            tooltip: 'Refresh history',
           ),
           if (history.isNotEmpty)
             IconButton(
-              onPressed: clearHistory,
-              icon: const Icon(Icons.delete_outline),
+              onPressed: isLoading || isClearing
+                  ? null
+                  : clearHistory,
+              icon: isClearing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(Icons.delete_outline),
               tooltip: 'Clear history',
             ),
         ],
@@ -143,86 +365,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
               child: CircularProgressIndicator(),
             )
           : history.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.history,
-                        size: 80,
-                        color: Colors.grey.shade400,
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'No transfer history yet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Your completed transfers will appear here.',
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
+              ? _buildEmptyState()
               : RefreshIndicator(
                   onRefresh: loadHistory,
                   child: ListView.builder(
+                    physics:
+                        const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(12),
                     itemCount: history.length,
                     itemBuilder: (context, index) {
-                      final item = history[index];
-
-                      final fileName =
-                          item['fileName']?.toString() ?? 'Unknown file';
-
-                      final direction =
-                          item['direction']?.toString() ?? 'unknown';
-
-                      final isSent = direction.toLowerCase() == 'sent';
-
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(12),
-                          leading: CircleAvatar(
-                            child: Icon(
-                              isSent
-                                  ? Icons.upload_rounded
-                                  : Icons.download_rounded,
-                            ),
-                          ),
-                          title: Text(
-                            fileName,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  isSent ? 'Sent' : 'Received',
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  formatBytes(item['bytes']),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  formatDate(item['completedAt']),
-                                ),
-                              ],
-                            ),
-                          ),
-                          isThreeLine: true,
-                        ),
+                      return _buildHistoryItem(
+                        history[index],
                       );
                     },
                   ),
