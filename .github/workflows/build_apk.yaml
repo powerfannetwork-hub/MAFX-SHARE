@@ -11,7 +11,7 @@ jobs:
           java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.32.0'
           channel: 'stable'
       - run: rm -rf android
       - run: flutter create . --project-name mafx_share --org com.mafx.share --platforms android
