@@ -1,36 +1,33 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+id("com.android.application")
+id("org.jetbrains.kotlin.android")
+id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "com.mafx.share"
-    compileSdk = 35
+namespace = "com.mafx.share"
+compileSdk = flutter.compileSdkVersion
+ndkVersion = flutter.ndkVersion
 
-    defaultConfig {
-        applicationId = "com.mafx.share"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+defaultConfig {
+    applicationId = "com.mafx.share"
+    minSdk = flutter.minSdkVersion
+    targetSdk = flutter.targetSdkVersion
+    versionCode = 1
+    versionName = "1.0.0"
 }
 
-dependencies {
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("androidx.core:core-ktx:1.15.0")
+compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
 
-    // QR Code generation and scanning
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("com.google.zxing:core:3.5.3")
+kotlinOptions {
+    jvmTarget = "17"
+}
+
+}
+
+flutter {
+source = "../.."
 }
