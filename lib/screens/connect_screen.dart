@@ -379,10 +379,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed:
-                          _loading || _receiverStarted
-                              ? null
-                              : _startReceiver,
+                      onPressed: _loading || _receiverStarted
+                          ? null
+                          : _startReceiver,
                       icon: const Icon(Icons.wifi_tethering),
                       label: Text(
                         _receiverStarted
@@ -432,10 +431,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed:
-                          _loading || !_receiverStarted
-                              ? null
-                              : _scanPeerQr,
+                      onPressed: _loading || !_receiverStarted
+                          ? null
+                          : _scanPeerQr,
                       icon: const Icon(Icons.qr_code_scanner),
                       label: const Text('Scan Other Phone QR'),
                     ),
@@ -449,7 +447,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
           Card(
             color: _connected
-                ? Colors.green.withOpacity(0.08)
+                ? Colors.green.withValues(alpha: 0.08)
                 : null,
             child: Padding(
               padding: const EdgeInsets.all(16),
