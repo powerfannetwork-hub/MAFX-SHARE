@@ -1,4 +1,4 @@
-name: Build
+name: Build MafX
 on: [push]
 jobs:
   build:
@@ -13,11 +13,11 @@ jobs:
         with:
           flutter-version: '3.24.5'
           channel: 'stable'
-      - run: rm -rf android ios web windows macos linux
-      - run: flutter create. --project-name flash --org com.flash.app --platforms android
-      - run: flutter pub upgrade
-      - run: flutter build apk --debug -v
+      - run: rm -rf android ios web
+      - run: flutter create. --project-name mafx_share --org com.mafx.share --platforms android
+      - run: flutter pub get
+      - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
-          name: flash-apk
+          name: MafX-Share-APK
           path: build/app/outputs/flutter-apk/app-debug.apk
