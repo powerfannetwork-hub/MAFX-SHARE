@@ -222,4 +222,50 @@ class TransferService {
   }
 
   Future<void> dispose() => stopReceiver();
+  Future<bool> sendFile({
+  required String receiverUrl,
+  required String token,
+  required String filePath,
+  required String fileName,
+}) async {
+  final file = File(filePath);
+
+  if (!await file.exists()) {
+    throw Exception('File not found: $fileName');
+  }
+
+  final client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 15);
+
+  try {
+    final uri = Uri.parse(receiverUrl).resolve('/upload');
+    final request = await client.postUrl(uri);
+
+    request.headers.set('x-mafx-token', token);
+    request.headers.set('x-file-name', fileName);
+    request.headers.contentType = ContentType.binary;
+    request.contentLength = await file.length();
+
+    await request.addStream(file.openRead());
+
+    final response = await request.close().timeout(
+      const Duration(minutes: 10),
+    );
+
+    final body = await response.transform(utf8.decoder).join();
+
+    if (response.statusCode != HttpStatus.created) {
+      throw Exception('Transfer failed: $body');
+    }
+
+    await recordTransfer(
+      fileName: fileName,
+      direction: 'sent',
+      bytes: await file.length(),
+    );
+
+    return true;
+  } finally {
+    client.close(force: true);
+  }
 }
