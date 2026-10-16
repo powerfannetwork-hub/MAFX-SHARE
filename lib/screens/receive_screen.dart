@@ -1,27 +1,72 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import 'connect_screen.dart';
-import 'qr_screen.dart';
+import '../services/transfer_service.dart';
 
-class ReceiveScreen extends StatelessWidget {
+class ReceiveScreen extends StatefulWidget {
   const ReceiveScreen({super.key});
 
-  void _openConnect(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const ConnectScreen(),
-      ),
+  @override
+  State<ReceiveScreen> createState() => _ReceiveScreenState();
+}
+
+class _ReceiveScreenState extends State<ReceiveScreen> {
+  final TransferService _transferService = TransferService.instance;
+
+  bool _starting = false;
+  String _status = 'Ready to receive files';
+  int? _port;
+
+  Future<void> _startReceiving() async {
+    setState(() {
+      _starting = true;
+      _status = 'Starting receiver...';
+    });
+
+    try {
+      final port = await _transferService.startReceiver();
+
+      if (!mounted) return;
+
+      setState(() {
+        _port = port;
+        _status = 'Receiver is running on port $port';
+      });
+
+      _showMessage(
+        'Receiver started. Connect both devices to the same local network.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _status = 'Could not start receiver: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _starting = false);
+      }
+    }
+  }
+
+  Future<void> _stopReceiving() async {
+    await _transferService.stopReceiver();
+
+    if (!mounted) return;
+
+    setState(() {
+      _port = null;
+      _status = 'Receiver stopped';
+    });
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
-  void _showMyQr(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const QrScreen(),
-      ),
-    );
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   @override
@@ -29,145 +74,69 @@ class ReceiveScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Receive Files'),
-        centerTitle: true,
+        backgroundColor: Colors.green,
+        foregroundColor: Colors.white,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          children: [
-            const SizedBox(height: 28),
-            const Icon(
-              Icons.phonelink_ring_rounded,
-              size: 88,
-              color: AppTheme.green,
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Ready to Receive',
-              style: TextStyle(
-                fontSize: 25,
-                fontWeight: FontWeight.w900,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.download_for_offline,
+                size: 100,
+                color: Colors.green,
               ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Prepare to receive photos, videos, documents '
-              'and other files from another device.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.blueGrey,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 25),
-
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: const Color(0xFFE5EDF4),
+              const SizedBox(height: 20),
+              const Text(
+                'MAFX SHARE',
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              child: const Column(
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.phone_android_rounded,
-                        color: AppTheme.green,
-                      ),
-                      SizedBox(width: 10),
-                      Text('Device name'),
-                      Spacer(),
-                      Text(
-                        'MAFX-ANDROID',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Divider(height: 28),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.wifi_rounded,
-                        color: AppTheme.green,
-                      ),
-                      SizedBox(width: 10),
-                      Text('Connection'),
-                      Spacer(),
-                      Text(
-                        'Not connected',
-                        style: TextStyle(
-                          color: Colors.orange,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              const SizedBox(height: 12),
+              Text(
+                _status,
+                textAlign: TextAlign.center,
               ),
-            ),
-
-            const SizedBox(height: 18),
-
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF00AEEF).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.info_outline_rounded,
-                    color: Color(0xFF00AEEF),
-                  ),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Zaɓi Connect Device domin bincika QR code '
-                      'na wata na’ura. Dole ne a kammala haɗin '
-                      'na’urori kafin a iya karɓar fayiloli.',
+              const SizedBox(height: 24),
+              if (_port == null)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _starting ? null : _startReceiving,
+                    icon: const Icon(Icons.wifi),
+                    label: Text(
+                      _starting ? 'Starting...' : 'START RECEIVING',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.all(16),
                     ),
                   ),
-                ],
-              ),
-            ),
-
-            const Spacer(),
-
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => _openConnect(context),
-                icon: const Icon(Icons.qr_code_scanner_rounded),
-                label: const Padding(
-                  padding: EdgeInsets.all(14),
-                  child: Text('CONNECT DEVICE'),
+                )
+              else ...[
+                SelectableText('Port: $_port'),
+                const SizedBox(height: 12),
+                const Text(
+                  'Keep this screen available while preparing the connection.',
+                  textAlign: TextAlign.center,
                 ),
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _showMyQr(context),
-                icon: const Icon(Icons.qr_code_2_rounded),
-                label: const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text('SHOW MY QR CODE'),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _stopReceiving,
+                    icon: const Icon(Icons.stop),
+                    label: const Text('STOP RECEIVING'),
+                  ),
                 ),
-              ),
-            ),
-          ],
+              ],
+            ],
+          ),
         ),
       ),
     );
