@@ -18,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -30,205 +30,95 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Verify Project Structure
+      - name: Verify project
         shell: bash
         run: |
-          set -eu
+          set -e
 
-          echo "========== PROJECT STRUCTURE =========="
+          test -f pubspec.yaml
+          test -f lib/main.dart
 
-          for FILE in \
-            pubspec.yaml \
-            lib/main.dart \
-            android/settings.gradle.kts \
-            android/app/build.gradle.kts \
-            android/app/src/main/AndroidManifest.xml
-          do
-            if [ -f "$FILE" ]; then
-              echo "OK: $FILE"
-            else
-              echo "ERROR: Missing file: $FILE"
-              exit 1
-            fi
-          done
-
-          echo ""
           flutter --version
           java -version
 
-      - name: Scan Android Project Before Pub Get
-        if: always()
+      - name: Regenerate Android project with modern Flutter
         shell: bash
         run: |
-          echo "========== ANDROID PROJECT FILES =========="
+          set -euo pipefail
 
-          find android -type f \
-            \( -name '*.kt' \
-            -o -name '*.java' \
-            -o -name '*.xml' \
-            -o -name '*.gradle' \
-            -o -name '*.gradle.kts' \) \
-            -not -path '*/build/*' \
-            -print | sort
+          echo "Backing up the current Android manifest..."
+          cp android/app/src/main/AndroidManifest.xml \
+            "$RUNNER_TEMP/MAFX-AndroidManifest.xml"
 
-          echo ""
-          echo "========== MAIN ACTIVITY FILES =========="
+          echo "Generating a fresh Android V2 project..."
+          flutter create \
+            --platforms=android \
+            --org com.mafx \
+            --project-name mafx_share \
+            --overwrite \
+            "$RUNNER_TEMP/mafx_android_v2"
 
-          find . -type f \
-            \( -name 'MainActivity.kt' \
-            -o -name 'MainActivity.java' \) \
-            -not -path './.git/*' \
-            -not -path './build/*' \
-            -not -path './.dart_tool/*' \
-            -print
+          echo "Replacing the old Android scaffold..."
+          rm -rf android
+          cp -a "$RUNNER_TEMP/mafx_android_v2/android" ./android
 
-          echo ""
-          echo "========== LEGACY EMBEDDING REFERENCES =========="
+          echo "Restoring MAFX SHARE Android permissions and settings..."
+          cp "$RUNNER_TEMP/MAFX-AndroidManifest.xml" \
+            android/app/src/main/AndroidManifest.xml
 
-          grep -RInE \
-            --include='*.kt' \
-            --include='*.java' \
-            --include='*.xml' \
-            --include='*.gradle' \
-            --include='*.gradle.kts' \
-            --include='*.dart' \
-            --exclude-dir=.git \
-            --exclude-dir=build \
-            --exclude-dir=.dart_tool \
-            --exclude-dir=.gradle \
-            'io\.flutter\.app\.FlutterActivity|io\.flutter\.app\.FlutterApplication|io\.flutter\.app\.FlutterActivityDelegate|io\.flutter\.view\.FlutterMain|io\.flutter\.view\.FlutterNativeView|PluginRegistry\.Registrar' \
-            . || true
+          echo "Checking Android V2 MainActivity..."
+          ACTIVITY="android/app/src/main/kotlin/com/mafx/share/MainActivity.kt"
 
-          echo ""
-          echo "========== MANIFEST FILES =========="
-
-          find . -type f \
-            -name AndroidManifest.xml \
-            -not -path './.git/*' \
-            -not -path './build/*' \
-            -not -path './.dart_tool/*' \
-            -print
-
-      - name: Get Flutter Dependencies
-        id: pub_get
-        shell: bash
-        run: |
-          set -o pipefail
-
-          flutter pub get -v 2>&1 \
-            | tee "$RUNNER_TEMP/pub-get.log"
-
-      - name: Report Pub Get Failure
-        if: failure() && steps.pub_get.outcome == 'failure'
-        shell: bash
-        run: |
-          echo "========== PUB GET ERROR REPORT =========="
-
-          if [ -f "$RUNNER_TEMP/pub-get.log" ]; then
-            grep -n -i -B 10 -A 15 \
-              -E 'deleted Android v1 embedding|checkForDeprecation|error|exception|failed|AndroidManifest.xml' \
-              "$RUNNER_TEMP/pub-get.log" || true
-
-            echo ""
-            echo "========== LAST 150 LINES =========="
-
-            tail -n 150 "$RUNNER_TEMP/pub-get.log"
-          fi
-
-      - name: Analyze Flutter Code
-        id: analyze
-        shell: bash
-        run: |
-          set -o pipefail
-
-          flutter analyze --no-pub 2>&1 \
-            | tee "$RUNNER_TEMP/flutter-analyze.log"
-
-      - name: Build Release APK
-        id: build_apk
-        shell: bash
-        run: |
-          set -o pipefail
-
-          flutter build apk \
-            --release \
-            --target-platform android-arm64 \
-            --verbose 2>&1 \
-            | tee "$RUNNER_TEMP/flutter-build.log"
-
-      - name: Report Build Failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "=========================================="
-          echo " MAFX SHARE - BUILD FAILURE REPORT"
-          echo "=========================================="
-
-          for LOG in \
-            "$RUNNER_TEMP/pub-get.log" \
-            "$RUNNER_TEMP/flutter-analyze.log" \
-            "$RUNNER_TEMP/flutter-build.log"
-          do
-            if [ -f "$LOG" ]; then
-              echo ""
-              echo "========== $LOG =========="
-
-              grep -n -i -B 8 -A 12 \
-                -E 'deleted Android v1 embedding|checkForDeprecation|error:|exception|caused by:|failed|AndroidManifest.xml|\.kt:[0-9]+|\.java:[0-9]+' \
-                "$LOG" | tail -n 250 || true
-
-              echo ""
-              echo "========== LAST 100 LINES =========="
-
-              tail -n 100 "$LOG"
-            fi
-          done
-
-      - name: Verify APK
-        if: success()
-        shell: bash
-        run: |
-          set -eu
-
-          APK="build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK not found: $APK"
+          if [ ! -f "$ACTIVITY" ]; then
+            echo "ERROR: Expected MainActivity.kt was not generated."
+            find android/app/src/main -name 'MainActivity.*' -print
             exit 1
           fi
 
-          echo "========== APK INFORMATION =========="
+          cat "$ACTIVITY"
+
+          if grep -RInE \
+            --include='*.kt' \
+            --include='*.java' \
+            --include='*.xml' \
+            'io\.flutter\.app\.FlutterActivity|io\.flutter\.app\.FlutterApplication|io\.flutter\.view\.FlutterMain|PluginRegistry\.Registrar' \
+            android; then
+            echo "ERROR: Legacy Android embedding references remain."
+            exit 1
+          fi
+
+          echo "Android scaffold regenerated."
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze Flutter code
+        run: flutter analyze --no-pub
+
+      - name: Build release APK
+        run: |
+          flutter build apk \
+            --release \
+            --target-platform android-arm64 \
+            --verbose
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          test -f "$APK"
 
           ls -lh "$APK"
-          file "$APK"
-
-          echo ""
-          echo "========== SHA-256 =========="
-
           sha256sum "$APK"
-
-          echo ""
-          echo "========== VERIFY APK ARCHIVE =========="
-
           unzip -t "$APK"
 
-      - name: Upload Release APK
-        if: success()
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: MAFX-SHARE-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload Diagnostic Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: MAFX-SHARE-diagnostic-logs
-          path: |
-            ${{ runner.temp }}/pub-get.log
-            ${{ runner.temp }}/flutter-analyze.log
-            ${{ runner.temp }}/flutter-build.log
-          if-no-files-found: ignore
-          retention-days: 7
