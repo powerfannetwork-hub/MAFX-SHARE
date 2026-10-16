@@ -42,8 +42,8 @@ jobs:
           }
           flutter --version
 
-      - name: Prepare Android project
-        run: |
+            - name: Prepare Android project
+           run: |
           flutter create \
             --no-pub \
             --platforms=android \
@@ -51,6 +51,8 @@ jobs:
             --project-name share \
             --android-language kotlin \
             .
+
+          rm -f test/widget_test.dart
 
       - name: Get dependencies
         run: flutter pub get
