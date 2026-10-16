@@ -50,7 +50,7 @@ class HomeScreen extends StatelessWidget {
                           width: 50,
                           height: 50,
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.13),
+                            color: Colors.white.withValues(alpha: 0.13),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: const Icon(
@@ -395,7 +395,7 @@ class _CategoryCard extends StatelessWidget {
                     width: 46,
                     height: 46,
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.13),
+                      color: color.withValues(alpha: 0.13),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Icon(
