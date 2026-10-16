@@ -1,70 +1,92 @@
 name: Build MAFX SHARE APK
 
-'on':
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+on:
+workflow_dispatch:
+push:
+branches:
+- main
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    name: Build Android APK
-    runs-on: ubuntu-latest
+build:
+name: Build and Verify Android APK
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  - name: Set up Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
+  - name: Set up Flutter
+    uses: subosito/flutter-action@v2
+    with:
+      channel: stable
+      cache: true
 
-      - name: Verify Flutter project
-        run: |
-          if [ ! -f pubspec.yaml ]; then
-            echo "ERROR: pubspec.yaml not found!"
-            exit 1
-          fi
-          flutter --version
+  - name: Check project files
+    run: |
+      test -f pubspec.yaml || {
+        echo "ERROR: pubspec.yaml is missing from the repository root."
+        exit 1
+      }
 
-      - name: Generate Android project files
-        run: |
-          flutter create \
-            --platforms=android \
-            --org com.mafx \
-            --project-name share \
-            --android-language kotlin \
-            --no-pub \
-            .
+      test -f lib/main.dart || {
+        echo "ERROR: lib/main.dart is missing."
+        exit 1
+      }
 
-          rm -rf test
+      flutter --version
+      java -version
 
-      - name: Get dependencies
-        run: flutter pub get
+  - name: Regenerate Android project scaffold
+    run: |
+      flutter create \
+        --no-pub \
+        --platforms=android \
+        --org com.mafx \
+        --project-name share \
+        --android-language kotlin \
+        .
 
-      - name: Analyze Flutter code
-        run: flutter analyze
+  - name: Remove incompatible default test
+    run: |
+      rm -f test/widget_test.dart
 
-      - name: Build release APK
-        run: |
-          flutter build apk --release \
-            --target-platform android-arm64
+  - name: Get Flutter dependencies
+    run: flutter pub get
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: mafx-share-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 7
+  - name: Analyze Flutter code
+    run: flutter analyze --no-pub
+
+  - name: Build release APK
+    run: flutter build apk --release --target-platform android-arm64
+
+  - name: Verify APK exists
+    run: |
+      APK="build/app/outputs/flutter-apk/app-release.apk"
+
+      if [ ! -f "$APK" ]; then
+        echo "ERROR: Release APK was not created."
+        exit 1
+      fi
+
+      echo "APK size:"
+      ls -lh "$APK"
+
+      echo "APK SHA-256:"
+      sha256sum "$APK"
+
+  - name: Upload release APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: mafx-share-apk
+      path: build/app/outputs/flutter-apk/app-release.apk
+      if-no-files-found: error
+      retention-days: 14
