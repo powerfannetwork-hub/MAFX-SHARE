@@ -1,5 +1,5 @@
 name: mafx_share
-description: MafX Share - 6x Faster than Xender
+description: MAFX SHARE - 6x Faster than Xender
 publish_to: none
 version: 1.0.0+1
 environment:
@@ -7,11 +7,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  file_picker: ^10.1.9
-  mobile_scanner: ^6.0.10
-  network_info_plus: ^6.1.4
-  permission_handler: ^12.0.1
-  qr_flutter: ^4.1.0
   cupertino_icons: ^1.0.8
 flutter:
   uses-material-design: true
