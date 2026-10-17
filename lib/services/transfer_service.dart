@@ -402,11 +402,12 @@ class TransferService {
   }
 
   Future<bool> sendFile({
-    required String receiverUrl,
-    required String token,
-    required String filePath,
-    required String fileName,
-  }) async {
+  required String receiverUrl,
+  required String token,
+  required String filePath,
+  required String fileName,
+  void Function(int sentBytes, int totalBytes)? onProgress,
+}) async {
     final file = File(filePath);
 
     if (!await file.exists()) {
