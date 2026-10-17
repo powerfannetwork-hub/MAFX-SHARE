@@ -1,9 +1,11 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 import '../services/transfer_service.dart';
+import 'media_browser_screen.dart';
 
 class SendScreen extends StatefulWidget {
   final String receiverUrl;
@@ -22,226 +24,251 @@ class SendScreen extends StatefulWidget {
 }
 
 class _SendScreenState extends State<SendScreen> {
-  static const Color green = Color(0xFF008D5A);
-  static const Color accent = Color(0xFF00D18B);
-  static const Color background = Color(0xFF19191D);
-  static const Color surface = Color(0xFF29292F);
-
   final TransferService _transferService = TransferService.instance;
 
-  final List<PlatformFile> _files = [];
+  final List<_SelectedFile> _selectedFiles = [];
 
-  bool _picking = false;
   bool _sending = false;
-
-  int _currentIndex = 0;
-  int _sentCount = 0;
-  int _failedCount = 0;
+  double _progress = 0;
+  String _status = '';
 
   String get _category =>
-      widget.category?.toLowerCase().trim() ?? 'files';
+      (widget.category ?? 'Files').toLowerCase();
 
-  String get _title {
-    switch (_category) {
-      case 'apps':
-        return 'Send Apps';
-      case 'photos':
-        return 'Send Photos';
-      case 'videos':
-        return 'Send Videos';
-      case 'music':
-        return 'Send Music';
-      default:
-        return 'Send Files';
-    }
-  }
-
-  IconData get _categoryIcon {
-    switch (_category) {
-      case 'apps':
-        return Icons.apps_rounded;
-      case 'photos':
-        return Icons.photo_library_rounded;
-      case 'videos':
-        return Icons.video_library_rounded;
-      case 'music':
-        return Icons.music_note_rounded;
-      default:
-        return Icons.folder_rounded;
-    }
-  }
-
-  List<String>? get _extensions {
-    switch (_category) {
-      case 'photos':
-        return [
-          'jpg', 'jpeg', 'png', 'gif', 'webp',
-          'bmp', 'heic', 'heif',
-        ];
-      case 'videos':
-        return [
-          'mp4', 'm4v', 'mov', 'avi', 'mkv',
-          'webm', '3gp', 'mpeg', 'mpg',
-        ];
-      case 'music':
-        return [
-          'mp3', 'm4a', 'aac', 'wav', 'ogg',
-          'flac', 'wma', 'opus', 'amr',
-        ];
-      case 'apps':
-        return ['apk', 'xapk', 'apks'];
-      default:
-        return null;
-    }
-  }
-
-  int get _totalBytes =>
-      _files.fold(0, (total, file) => total + file.size);
-
-  double get _progress {
-    if (_files.isEmpty) return 0;
-
-    return (_sentCount + _failedCount) / _files.length;
+  @override
+  void initState() {
+    super.initState();
   }
 
   Future<void> _pickFiles() async {
-    if (_picking || _sending) return;
+    if (_sending) return;
 
-    setState(() => _picking = true);
+    if (_category == 'photos' ||
+        _category == 'videos' ||
+        _category == 'music') {
+      await _pickMedia();
+    } else {
+      await _pickDocuments();
+    }
+  }
+
+  Future<void> _pickMedia() async {
+    final String category;
+
+    if (_category == 'photos') {
+      category = 'Photos';
+    } else if (_category == 'videos') {
+      category = 'Videos';
+    } else {
+      category = 'Music';
+    }
 
     try {
-      final extensions = _extensions;
+      final List<AssetEntity>? assets =
+          await Navigator.of(context).push<List<AssetEntity>>(
+        MaterialPageRoute(
+          builder: (_) => MediaBrowserScreen(
+            category: category,
+            allowMultiple: true,
+          ),
+        ),
+      );
 
+      if (assets == null || assets.isEmpty) return;
+
+      final List<_SelectedFile> newFiles = [];
+
+      for (final asset in assets) {
+        final File? file = await asset.file;
+
+        if (file == null || !await file.exists()) {
+          continue;
+        }
+
+        final String name =
+            asset.title?.trim().isNotEmpty == true
+                ? asset.title!
+                : 'media_${asset.id}';
+
+        newFiles.add(
+          _SelectedFile(
+            name: name,
+            path: file.path,
+            size: await file.length(),
+          ),
+        );
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        for (final file in newFiles) {
+          final alreadyAdded = _selectedFiles.any(
+            (item) => item.path == file.path,
+          );
+
+          if (!alreadyAdded) {
+            _selectedFiles.add(file);
+          }
+        }
+
+        _status = newFiles.isEmpty
+            ? 'Ba a sami fayilolin da za a iya amfani da su ba.'
+            : 'An zaɓi fayiloli ${newFiles.length}.';
+      });
+    } catch (e) {
+      _showMessage('An kasa buɗe media browser: $e');
+    }
+  }
+
+  Future<void> _pickDocuments() async {
+    try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
-        type: extensions == null ? FileType.any : FileType.custom,
-        allowedExtensions: extensions,
+        type: FileType.any,
         withData: false,
       );
 
-      if (!mounted || result == null) return;
+      if (result == null) return;
 
-      final knownPaths = _files
-          .map((file) => file.path)
-          .whereType<String>()
-          .toSet();
+      final List<_SelectedFile> newFiles = [];
 
-      final knownNames = _files.map((file) => file.name).toSet();
-
-      final additions = result.files.where((file) {
+      for (final file in result.files) {
         final path = file.path;
 
-        if (path != null && path.isNotEmpty) {
-          return !knownPaths.contains(path);
-        }
+        if (path == null) continue;
 
-        return !knownNames.contains(file.name);
-      }).toList();
+        newFiles.add(
+          _SelectedFile(
+            name: file.name,
+            path: path,
+            size: file.size,
+          ),
+        );
+      }
+
+      if (!mounted) return;
 
       setState(() {
-        _files.addAll(additions);
-      });
+        for (final file in newFiles) {
+          final alreadyAdded = _selectedFiles.any(
+            (item) => item.path == file.path,
+          );
 
-      if (additions.isEmpty) {
-        _showMessage('No new files were added.');
-      }
-    } catch (error) {
-      _showMessage('Unable to open file picker: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _picking = false);
-      }
+          if (!alreadyAdded) {
+            _selectedFiles.add(file);
+          }
+        }
+
+        _status = 'An ƙara fayiloli ${newFiles.length}.';
+      });
+    } catch (e) {
+      _showMessage('An kasa zaɓar fayiloli: $e');
     }
+  }
+
+  void _removeFile(_SelectedFile file) {
+    setState(() {
+      _selectedFiles.remove(file);
+    });
   }
 
   Future<void> _sendFiles() async {
-    if (_sending || _files.isEmpty) return;
-
-    final missingPaths = _files.any(
-      (file) => file.path == null || file.path!.isEmpty,
-    );
-
-    if (missingPaths) {
-      _showMessage(
-        'Some files cannot be accessed. Select them again.',
-      );
-      return;
-    }
+    if (_sending || _selectedFiles.isEmpty) return;
 
     setState(() {
       _sending = true;
-      _currentIndex = 0;
-      _sentCount = 0;
-      _failedCount = 0;
+      _progress = 0;
+      _status = 'Ana fara aikawa...';
     });
 
-    final selectedFiles = List<PlatformFile>.from(_files);
+    int sent = 0;
+    final int total = _selectedFiles.length;
+    final List<String> failedFiles = [];
 
-    for (var index = 0; index < selectedFiles.length; index++) {
+    try {
+      for (final selected in List<_SelectedFile>.from(_selectedFiles)) {
+        if (!mounted) return;
+
+        setState(() {
+          _status = 'Ana aikawa: ${selected.name}';
+          _progress = sent / total;
+        });
+
+        final file = File(selected.path);
+
+        if (!await file.exists()) {
+          failedFiles.add(selected.name);
+          continue;
+        }
+
+        try {
+          await _transferService.sendFile(
+            receiverUrl: widget.receiverUrl,
+            token: widget.receiverToken,
+            filePath: selected.path,
+            fileName: selected.name,
+          );
+
+          sent++;
+        } catch (_) {
+          failedFiles.add(selected.name);
+        }
+
+        if (!mounted) return;
+
+        setState(() {
+          _progress = (sent + failedFiles.length) / total;
+        });
+      }
+
       if (!mounted) return;
 
-      final file = selectedFiles[index];
-      final path = file.path;
+      setState(() {
+        _status = failedFiles.isEmpty
+            ? 'An aika duk fayiloli cikin nasara!'
+            : 'An aika $sent daga $total. '
+                'Fayilolin da suka gaza: ${failedFiles.length}.';
+      });
 
-      setState(() => _currentIndex = index);
-
-      if (path == null || path.isEmpty) {
-        setState(() => _failedCount++);
-        continue;
-      }
-
-      try {
-        await _transferService.sendFile(
-          receiverUrl: widget.receiverUrl,
-          token: widget.receiverToken,
-          filePath: path,
-          fileName: file.name,
+      if (failedFiles.isEmpty) {
+        _showMessage('An aika duk fayiloli cikin nasara!');
+        setState(() {
+          _selectedFiles.clear();
+        });
+      } else {
+        _showMessage(
+          'An aika $sent daga $total fayiloli. '
+          'Duba fayilolin da suka gaza.',
         );
-
-        if (!mounted) return;
-
-        setState(() => _sentCount++);
-      } catch (error) {
-        debugPrint('Failed to send ${file.name}: $error');
-
-        if (!mounted) return;
-
-        setState(() => _failedCount++);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _status = 'An samu matsala yayin aikawa: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+        });
       }
     }
-
-    if (!mounted) return;
-
-    setState(() => _sending = false);
-
-    if (_failedCount == 0) {
-      _showMessage('All files sent successfully.');
-    } else {
-      _showMessage(
-        'Finished: $_sentCount sent, $_failedCount failed.',
-      );
-    }
-  }
-
-  void _removeFile(int index) {
-    if (_sending) return;
-
-    setState(() => _files.removeAt(index));
   }
 
   void _showMessage(String message) {
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(message)),
     );
   }
 
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
+  String _formatSize(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    }
 
     if (bytes < 1024 * 1024) {
       return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -254,316 +281,241 @@ class _SendScreenState extends State<SendScreen> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 110,
-              height: 110,
-              decoration: BoxDecoration(
-                color: green.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                _categoryIcon,
-                size: 58,
-                color: accent,
-              ),
-            ),
-            const SizedBox(height: 22),
-            Text(
-              _title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Choose the items you want to share '
-              'with the connected phone.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white60,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 26),
-            FilledButton.icon(
-              onPressed: _picking ? null : _pickFiles,
-              icon: const Icon(Icons.add_rounded),
-              label: Text(
-                _picking ? 'Opening...' : 'Choose Files',
-              ),
-              style: FilledButton.styleFrom(
-                backgroundColor: green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 26,
-                  vertical: 15,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  IconData _fileIcon(String name) {
+    final extension = name.split('.').last.toLowerCase();
 
-  Widget _buildSelectedFiles() {
-    return Column(
-      children: [
-        Container(
-          color: surface,
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.check_circle_rounded,
-                color: accent,
-                size: 30,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${_files.length} selected',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Total size: ${_formatBytes(_totalBytes)}',
-                      style: const TextStyle(
-                        color: Colors.white60,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: _sending
-                    ? null
-                    : () => setState(() => _files.clear()),
-                icon: const Icon(
-                  Icons.delete_outline_rounded,
-                  color: Colors.white70,
-                ),
-                tooltip: 'Clear selection',
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(14),
-            itemCount: _files.length,
-            separatorBuilder: (_, __) =>
-                const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final file = _files[index];
-
-              return Container(
-                decoration: BoxDecoration(
-                  color: surface,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: ListTile(
-                  leading: Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: green.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      _categoryIcon,
-                      color: accent,
-                    ),
-                  ),
-                  title: Text(
-                    file.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  subtitle: Text(
-                    _formatBytes(file.size),
-                    style: const TextStyle(
-                      color: Colors.white60,
-                    ),
-                  ),
-                  trailing: IconButton(
-                    tooltip: 'Remove file',
-                    onPressed: _sending
-                        ? null
-                        : () => _removeFile(index),
-                    icon: const Icon(
-                      Icons.close_rounded,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: OutlinedButton.icon(
-            onPressed: _picking || _sending ? null : _pickFiles,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Add More Files'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: accent,
-              side: const BorderSide(color: accent),
-              minimumSize: const Size(double.infinity, 48),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-      ],
-    );
-  }
-
-  Widget _buildProgress() {
-    if (!_sending && _sentCount == 0 && _failedCount == 0) {
-      return const SizedBox.shrink();
+    switch (extension) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'webp':
+        return Icons.image;
+      case 'mp4':
+      case 'mkv':
+      case 'mov':
+      case 'avi':
+        return Icons.video_file;
+      case 'mp3':
+      case 'm4a':
+      case 'wav':
+      case 'aac':
+        return Icons.audio_file;
+      case 'apk':
+        return Icons.android;
+      case 'pdf':
+        return Icons.picture_as_pdf;
+      default:
+        return Icons.insert_drive_file;
     }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      color: surface,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Transfer progress',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              Text(
-                '${(_progress * 100).round()}%',
-                style: const TextStyle(
-                  color: accent,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          LinearProgressIndicator(
-            value: _sending ? _progress : 1,
-            backgroundColor: Colors.white12,
-            color: accent,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Sent: $_sentCount   Failed: $_failedCount',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          if (_sending && _currentIndex < _files.length)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Sending: ${_files[_currentIndex].name}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white60),
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: background,
+      backgroundColor: const Color(0xFF101820),
       appBar: AppBar(
-        backgroundColor: green,
+        title: const Text('Send Files'),
+        backgroundColor: const Color(0xFF101820),
         foregroundColor: Colors.white,
-        title: Text(_title),
-        actions: [
-          IconButton(
-            tooltip: 'Choose files',
-            onPressed: _picking || _sending ? null : _pickFiles,
-            icon: const Icon(Icons.add_rounded),
-          ),
-        ],
       ),
       body: SafeArea(
         child: Column(
           children: [
-            Expanded(
-              child: _files.isEmpty
-                  ? _buildEmptyState()
-                  : _buildSelectedFiles(),
-            ),
-            _buildProgress(),
-            Padding(
+            Container(
+              width: double.infinity,
               padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: FilledButton.icon(
-                  onPressed: _files.isEmpty || _sending || _picking
-                      ? null
-                      : _sendFiles,
-                  icon: _sending
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.send_rounded),
-                  label: Text(
-                    _sending
-                        ? 'Sending files...'
-                        : 'SEND ${_files.isEmpty ? '' : '(${_files.length})'}',
+              color: const Color(0xFF192832),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.devices,
+                        color: Color(0xFF00D084),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'MAFX SHARE',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Category: ${widget.category ?? 'Files'}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_selectedFiles.length} file(s) selected',
                     style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF00D084),
                     ),
                   ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: green,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: Colors.white12,
-                    disabledForegroundColor: Colors.white38,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
+                ],
+              ),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _sending ? null : _pickFiles,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Files'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF00D084),
+                        side: const BorderSide(
+                          color: Color(0xFF00D084),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                        ),
+                      ),
                     ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          _sending || _selectedFiles.isEmpty
+                              ? null
+                              : _sendFiles,
+                      icon: const Icon(Icons.send),
+                      label: const Text('Send Now'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00D084),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            if (_sending || _progress > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinearProgressIndicator(
+                      value: _progress.clamp(0.0, 1.0),
+                      color: const Color(0xFF00D084),
+                      backgroundColor: Colors.white12,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _status,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+
+            if (_status.isNotEmpty && !_sending)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _status,
+                    style: const TextStyle(color: Colors.white70),
                   ),
                 ),
               ),
+
+            const Divider(color: Colors.white12),
+
+            Expanded(
+              child: _selectedFiles.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.folder_open,
+                            color: Colors.white38,
+                            size: 64,
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            'No files selected',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 16,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Tap Add Files to choose files to send.',
+                            style: TextStyle(color: Colors.white38),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: _selectedFiles.length,
+                      itemBuilder: (context, index) {
+                        final file = _selectedFiles[index];
+
+                        return ListTile(
+                          leading: Icon(
+                            _fileIcon(file.name),
+                            color: const Color(0xFF00D084),
+                            size: 32,
+                          ),
+                          title: Text(
+                            file.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          subtitle: Text(
+                            _formatSize(file.size),
+                            style: const TextStyle(
+                              color: Colors.white54,
+                            ),
+                          ),
+                          trailing: IconButton(
+                            onPressed: _sending
+                                ? null
+                                : () => _removeFile(file),
+                            icon: const Icon(
+                              Icons.close,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _SelectedFile {
+  final String name;
+  final String path;
+  final int size;
+
+  const _SelectedFile({
+    required this.name,
+    required this.path,
+    required this.size,
+  });
 }
