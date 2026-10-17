@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../services/transfer_service.dart';
 import 'connect_screen.dart';
@@ -23,6 +24,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   List<File> _files = [];
   bool _loading = false;
   String? _error;
+  String? _openingPath;
 
   @override
   void initState() {
@@ -84,7 +86,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         ? file.uri.pathSegments.last
         : file.path;
 
-    // Received files are saved with a timestamp prefix.
+    // Received files have a timestamp prefix.
     final separator = storedName.indexOf('_');
 
     if (separator > 0) {
@@ -96,6 +98,61 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
 
     return storedName;
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _openFile(File file) async {
+    if (_openingPath != null) return;
+
+    setState(() {
+      _openingPath = file.path;
+    });
+
+    try {
+      if (!await file.exists()) {
+        _showMessage('Ba a sami wannan fayil ɗin ba.');
+        return;
+      }
+
+      final result = await OpenFilex.open(file.path);
+
+      if (!mounted) return;
+
+      if (result.type != ResultType.done) {
+        final message = result.message.trim();
+
+        _showMessage(
+          message.isNotEmpty
+              ? 'Ba a iya buɗe fayil ɗin ba: $message'
+              : 'Ba a iya buɗe fayil ɗin ba. '
+                  'Tabbatar kana da app da zai iya buɗe shi.',
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Open received file failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      _showMessage(
+        'An samu matsala wajen buɗe fayil ɗin. '
+        'Gwada sake buɗewa.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _openingPath = null;
+        });
+      }
+    }
   }
 
   Future<void> _openConnection() async {
@@ -283,6 +340,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         itemBuilder: (context, index) {
           final file = _files[index];
           final name = _displayName(file);
+          final isOpening = _openingPath == file.path;
 
           return Container(
             decoration: BoxDecoration(
@@ -293,6 +351,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               ),
             ),
             child: ListTile(
+              onTap: _openingPath == null
+                  ? () => _openFile(file)
+                  : null,
               leading: const CircleAvatar(
                 backgroundColor: Color(0x2200D18B),
                 child: Icon(
@@ -315,7 +376,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                   if (!snapshot.hasData) {
                     return const Text(
                       'Reading file size...',
-                      style: TextStyle(color: Colors.white54),
+                      style: TextStyle(
+                        color: Colors.white54,
+                      ),
                     );
                   }
 
@@ -327,10 +390,19 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                   );
                 },
               ),
-              trailing: const Icon(
-                Icons.check_circle_rounded,
-                color: Color(0xFF00D18B),
-              ),
+              trailing: isOpening
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF00D18B),
+                      ),
+                    )
+                  : const Icon(
+                      Icons.open_in_new_rounded,
+                      color: Color(0xFF00D18B),
+                    ),
             ),
           );
         },
