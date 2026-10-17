@@ -70,7 +70,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       });
 
       _showMessage(
-        'An kasa loda tarihin transfers. Ka sake gwadawa.',
+        'Unable to load transfer history. Please try again.',
       );
     }
   }
@@ -133,7 +133,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       });
 
       _showMessage(
-        'An kasa share tarihin transfers. Ka sake gwadawa.',
+        'Unable to clear transfer history. Please try again.',
       );
     }
   }
