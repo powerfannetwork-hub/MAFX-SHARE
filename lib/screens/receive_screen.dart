@@ -19,6 +19,11 @@ class ReceiveScreen extends StatefulWidget {
 }
 
 class _ReceiveScreenState extends State<ReceiveScreen> {
+  static const Color _green = Color(0xFF008D5A);
+  static const Color _accent = Color(0xFF00D18B);
+  static const Color _dark = Color(0xFF202024);
+  static const Color _surface = Color(0xFF29292F);
+
   final TransferService _service = TransferService.instance;
 
   List<File> _files = [];
@@ -83,7 +88,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   String _displayName(File file) {
-  return _service.getReceivedFileName(file);
+    return _service.getReceivedFileName(file);
   }
 
   void _showMessage(String message) {
@@ -159,56 +164,51 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   Widget _buildHeader() {
-    const green = Color(0xFF00D18B);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white10),
-        ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.shield_rounded,
-                  color: green,
-                  size: 24,
-                ),
-                SizedBox(width: 10),
-                Text(
-                  'MAFX SHARE',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 10),
-            Text(
-              'Receive files from another device over your local network.',
-              style: TextStyle(
-                color: Colors.white70,
-                height: 1.4,
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.shield_rounded,
+                color: _accent,
+                size: 26,
               ),
+              SizedBox(width: 10),
+              Text(
+                'MAFX SHARE',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 19,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+          Text(
+            'Receive photos, videos, music and documents '
+            'from another device over your local network.',
+            style: TextStyle(
+              color: Colors.white70,
+              height: 1.5,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildConnectionButton() {
-    const green = Color(0xFF008D5A);
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       child: SizedBox(
@@ -219,12 +219,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           icon: const Icon(Icons.wifi_rounded),
           label: const Text(
             'Connect and Receive',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontWeight: FontWeight.bold),
           ),
           style: FilledButton.styleFrom(
-            backgroundColor: green,
+            backgroundColor: _green,
             foregroundColor: Colors.white,
           ),
         ),
@@ -239,7 +237,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         children: [
           const Icon(
             Icons.folder_rounded,
-            color: Color(0xFF00D18B),
+            color: _accent,
           ),
           const SizedBox(width: 10),
           const Expanded(
@@ -254,9 +252,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           ),
           Text(
             '${_files.length} files',
-            style: const TextStyle(
-              color: Colors.white70,
-            ),
+            style: const TextStyle(color: Colors.white70),
           ),
         ],
       ),
@@ -340,9 +336,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   Widget _buildFileList() {
     if (_loading && _files.isEmpty) {
       return const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF00D18B),
-        ),
+        child: CircularProgressIndicator(color: _accent),
       );
     }
 
@@ -370,9 +364,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Colors.white10,
-              ),
+              border: Border.all(color: Colors.white10),
             ),
             child: ListTile(
               onTap: _openingPath == null
@@ -382,7 +374,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 backgroundColor: Color(0x2200D18B),
                 child: Icon(
                   Icons.insert_drive_file_rounded,
-                  color: Color(0xFF00D18B),
+                  color: _accent,
                 ),
               ),
               title: Text(
@@ -419,9 +411,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
                   return Text(
                     _formatBytes(snapshot.data!),
-                    style: const TextStyle(
-                      color: Colors.white60,
-                    ),
+                    style: const TextStyle(color: Colors.white60),
                   );
                 },
               ),
@@ -431,12 +421,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Color(0xFF00D18B),
+                        color: _accent,
                       ),
                     )
                   : const Icon(
                       Icons.open_in_new_rounded,
-                      color: Color(0xFF00D18B),
+                      color: _accent,
                     ),
             ),
           );
@@ -447,14 +437,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const green = Color(0xFF008D5A);
-    const dark = Color(0xFF202024);
-
     return Scaffold(
-      backgroundColor: dark,
+      backgroundColor: _dark,
       appBar: AppBar(
         title: const Text('Receive Files'),
-        backgroundColor: green,
+        backgroundColor: _green,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
@@ -471,9 +458,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             _buildConnectionButton(),
             _buildFileHeading(),
             const SizedBox(height: 12),
-            Expanded(
-              child: _buildFileList(),
-            ),
+            Expanded(child: _buildFileList()),
           ],
         ),
       ),
