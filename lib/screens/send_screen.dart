@@ -12,12 +12,14 @@ class SendScreen extends StatefulWidget {
   final String receiverUrl;
   final String receiverToken;
   final String? category;
+  final String transferMode;
 
   const SendScreen({
     super.key,
     required this.receiverUrl,
     required this.receiverToken,
     this.category,
+    this.transferMode = 'STANDARD',
   });
 
   @override
@@ -43,6 +45,8 @@ class _SendScreenState extends State<SendScreen> {
 
   int _sentCount = 0;
   int _totalBytes = 0;
+
+  bool get _isHighSpeed => widget.transferMode.toUpperCase() == '5G_PLUS';
 
   String get _category => (widget.category ?? 'files').toLowerCase();
 
@@ -524,7 +528,6 @@ class _SendScreenState extends State<SendScreen> {
               ),
             ],
           ),
-
           if (_sending || _progress > 0) ...[
             const SizedBox(height: 14),
             LinearProgressIndicator(
@@ -543,7 +546,6 @@ class _SendScreenState extends State<SendScreen> {
               ),
             ),
           ],
-
           if (_sending) ...[
             const SizedBox(height: 14),
             Text(
@@ -574,7 +576,6 @@ class _SendScreenState extends State<SendScreen> {
               ),
             ),
           ],
-
           if (_sentCount > 0) ...[
             const SizedBox(height: 8),
             Text(
@@ -586,7 +587,6 @@ class _SendScreenState extends State<SendScreen> {
               style: const TextStyle(color: Colors.white70),
             ),
           ],
-
           if (_failedFiles.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
@@ -718,7 +718,46 @@ class _SendScreenState extends State<SendScreen> {
                     'Category: ${widget.category ?? 'Files'}',
                     style: const TextStyle(color: Colors.white70),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _isHighSpeed
+                          ? green.withValues(alpha: 0.12)
+                          : Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: _isHighSpeed ? green : Colors.white24,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isHighSpeed
+                              ? Icons.bolt_rounded
+                              : Icons.speed_rounded,
+                          size: 18,
+                          color: _isHighSpeed ? green : Colors.white70,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _isHighSpeed
+                              ? '5G+ High-Speed Mode'
+                              : 'Standard Transfer Mode',
+                          style: TextStyle(
+                            color: _isHighSpeed ? green : Colors.white70,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Text(
                     '${_selectedFiles.length} file(s) selected',
                     style: const TextStyle(color: green),
@@ -726,7 +765,6 @@ class _SendScreenState extends State<SendScreen> {
                 ],
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -765,7 +803,6 @@ class _SendScreenState extends State<SendScreen> {
                 ],
               ),
             ),
-
             if (_selectedFiles.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -791,9 +828,7 @@ class _SendScreenState extends State<SendScreen> {
                   ],
                 ),
               ),
-
             const SizedBox(height: 8),
-
             Expanded(
               child: _selectedFiles.isEmpty
                   ? Center(
@@ -838,7 +873,6 @@ class _SendScreenState extends State<SendScreen> {
                       },
                     ),
             ),
-
             if (_status.isNotEmpty) _buildProgressPanel(),
           ],
         ),
