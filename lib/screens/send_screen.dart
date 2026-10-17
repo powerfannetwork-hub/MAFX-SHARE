@@ -19,7 +19,7 @@ class SendScreen extends StatefulWidget {
     required this.receiverUrl,
     required this.receiverToken,
     this.category,
-    this.transferMode = 'STANDARD',
+    this.transferMode = TransferService.standardMode,
   });
 
   @override
@@ -46,7 +46,8 @@ class _SendScreenState extends State<SendScreen> {
   int _sentCount = 0;
   int _totalBytes = 0;
 
-  bool get _isHighSpeed => widget.transferMode.toUpperCase() == '5G_PLUS';
+  bool get _isHighSpeed =>
+      widget.transferMode == TransferService.highSpeedMode;
 
   String get _category => (widget.category ?? 'files').toLowerCase();
 
@@ -98,6 +99,7 @@ class _SendScreenState extends State<SendScreen> {
         }
 
         final assetName = asset.title?.trim();
+
         final name = assetName != null && assetName.isNotEmpty
             ? assetName
             : 'media_${asset.id}';
@@ -112,6 +114,7 @@ class _SendScreenState extends State<SendScreen> {
       }
 
       if (!mounted) return;
+
       _addFiles(newFiles);
     } catch (error, stackTrace) {
       debugPrint('Media selection failed: $error');
@@ -151,6 +154,7 @@ class _SendScreenState extends State<SendScreen> {
       }
 
       if (!mounted) return;
+
       _addFiles(newFiles);
     } catch (error, stackTrace) {
       debugPrint('File selection failed: $error');
@@ -219,6 +223,7 @@ class _SendScreenState extends State<SendScreen> {
     if (_sending || _selectedFiles.isEmpty) return;
 
     final filesToSend = List<_SelectedFile>.from(_selectedFiles);
+    final total = filesToSend.length;
 
     setState(() {
       _sending = true;
@@ -238,8 +243,6 @@ class _SendScreenState extends State<SendScreen> {
 
     var sent = 0;
     var failed = 0;
-
-    final total = filesToSend.length;
 
     for (var index = 0; index < total; index++) {
       if (!mounted) return;
@@ -266,11 +269,15 @@ class _SendScreenState extends State<SendScreen> {
 
         final fileSize = await file.length();
 
-        await _transferService.sendFile(
+        final success = await _transferService.sendFile(
           receiverUrl: widget.receiverUrl,
           token: widget.receiverToken,
           filePath: selected.path,
           fileName: selected.name,
+
+          // Send the selected mode to the actual transfer service.
+          mode: widget.transferMode,
+
           onProgress: (sentBytes, totalBytes) {
             if (!mounted) return;
 
@@ -279,19 +286,20 @@ class _SendScreenState extends State<SendScreen> {
               _currentFileTotalBytes = totalBytes;
 
               _currentFileProgress = totalBytes > 0
-                  ? (sentBytes / totalBytes)
-                      .clamp(0.0, 1.0)
-                      .toDouble()
+                  ? (sentBytes / totalBytes).clamp(0.0, 1.0).toDouble()
                   : 0.0;
             });
           },
         );
 
+        if (!success) {
+          throw Exception('The receiver did not confirm this file.');
+        }
+
         sent++;
         _totalBytes += fileSize;
       } catch (error, stackTrace) {
         failed++;
-
         _failedFiles.add(selected);
 
         debugPrint('Failed to send ${selected.name}: $error');
@@ -337,6 +345,33 @@ class _SendScreenState extends State<SendScreen> {
         'Review the failed files and retry.',
       );
     }
+  }
+
+  Future<void> _retryFailedFiles() async {
+    if (_sending || _failedFiles.isEmpty) return;
+
+    final failedItems = List<_SelectedFile>.from(_failedFiles);
+
+    setState(() {
+      _selectedFiles
+        ..clear()
+        ..addAll(failedItems);
+
+      _failedFiles.clear();
+
+      _progress = 0;
+      _currentFileProgress = 0;
+      _currentFileName = '';
+      _currentFileSentBytes = 0;
+      _currentFileTotalBytes = 0;
+
+      _sentCount = 0;
+      _totalBytes = 0;
+
+      _status = 'Retrying failed files...';
+    });
+
+    await _sendFiles();
   }
 
   void _showMessage(String message) {
@@ -623,33 +658,6 @@ class _SendScreenState extends State<SendScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _retryFailedFiles() async {
-    if (_sending || _failedFiles.isEmpty) return;
-
-    final failedItems = List<_SelectedFile>.from(_failedFiles);
-
-    setState(() {
-      _selectedFiles
-        ..clear()
-        ..addAll(failedItems);
-
-      _failedFiles.clear();
-
-      _progress = 0;
-      _currentFileProgress = 0;
-      _currentFileName = '';
-      _currentFileSentBytes = 0;
-      _currentFileTotalBytes = 0;
-
-      _sentCount = 0;
-      _totalBytes = 0;
-
-      _status = 'Retrying failed files...';
-    });
-
-    await _sendFiles();
   }
 
   @override
