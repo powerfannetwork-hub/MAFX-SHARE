@@ -48,14 +48,15 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       setState(() {
         _files = files;
       });
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint('Failed to load received files: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
       if (!mounted) return;
 
       setState(() {
-        _error = 'An kasa loda jerin fayiloli.';
+        _error = 'Unable to load received files. Please try again.';
       });
-
-      debugPrint('Load received files failed: $error');
     } finally {
       if (mounted) {
         setState(() {
@@ -86,7 +87,6 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         ? file.uri.pathSegments.last
         : file.path;
 
-    // Received files have a timestamp prefix.
     final separator = storedName.indexOf('_');
 
     if (separator > 0) {
@@ -120,7 +120,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
     try {
       if (!await file.exists()) {
-        _showMessage('Ba a sami wannan fayil ɗin ba.');
+        _showMessage(
+          'This file no longer exists. Refresh the file list.',
+        );
+        await _loadReceivedFiles();
         return;
       }
 
@@ -133,18 +136,17 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
         _showMessage(
           message.isNotEmpty
-              ? 'Ba a iya buɗe fayil ɗin ba: $message'
-              : 'Ba a iya buɗe fayil ɗin ba. '
-                  'Tabbatar kana da app da zai iya buɗe shi.',
+              ? 'Unable to open file: $message'
+              : 'Unable to open this file. '
+                  'Make sure a compatible app is installed.',
         );
       }
     } catch (error, stackTrace) {
-      debugPrint('Open received file failed: $error');
+      debugPrint('Failed to open received file: $error');
       debugPrintStack(stackTrace: stackTrace);
 
       _showMessage(
-        'An samu matsala wajen buɗe fayil ɗin. '
-        'Gwada sake buɗewa.',
+        'An error occurred while opening the file. Please try again.',
       );
     } finally {
       if (mounted) {
@@ -170,82 +172,178 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    const green = Color(0xFF008D5A);
-    const dark = Color(0xFF202024);
+  Widget _buildHeader() {
+    const green = Color(0xFF00D18B);
 
-    return Scaffold(
-      backgroundColor: dark,
-      appBar: AppBar(
-        title: const Text('Receive Files'),
-        backgroundColor: green,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            tooltip: 'Refresh files',
-            onPressed: _loading ? null : _loadReceivedFiles,
-            icon: const Icon(Icons.refresh_rounded),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.shield_rounded,
+                  color: green,
+                  size: 24,
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'MAFX SHARE',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 10),
+            Text(
+              'Receive files from another device over your local network.',
+              style: TextStyle(
+                color: Colors.white70,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConnectionButton() {
+    const green = Color(0xFF008D5A);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: SizedBox(
+        width: double.infinity,
+        height: 54,
+        child: FilledButton.icon(
+          onPressed: _openConnection,
+          icon: const Icon(Icons.wifi_rounded),
+          label: const Text(
+            'Connect and Receive',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: green,
+            foregroundColor: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFileHeading() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.folder_rounded,
+            color: Color(0xFF00D18B),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Received Files',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Text(
+            '${_files.length} files',
+            style: const TextStyle(
+              color: Colors.white70,
+            ),
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: FilledButton.icon(
-                  onPressed: _openConnection,
-                  icon: const Icon(Icons.wifi_rounded),
-                  label: const Text(
-                    'Connect and Receive',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return RefreshIndicator(
+      onRefresh: _loadReceivedFiles,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 90),
+          Icon(
+            Icons.inbox_rounded,
+            size: 76,
+            color: Colors.white38,
+          ),
+          SizedBox(height: 16),
+          Center(
+            child: Text(
+              'No received files yet.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
+          ),
+          SizedBox(height: 8),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              'Connect to another device to receive files. '
+              'Your received files will appear here.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white38,
+                height: 1.5,
               ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.folder_rounded,
-                    color: Color(0xFF00D18B),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Received Files',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '${_files.length} files',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline_rounded,
+              color: Colors.redAccent,
+              size: 48,
             ),
             const SizedBox(height: 12),
-            Expanded(
-              child: _buildFileList(),
+            Text(
+              _error ?? 'Something went wrong.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white70,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _loading ? null : _loadReceivedFiles,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try Again'),
             ),
           ],
         ),
@@ -263,71 +361,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
 
     if (_error != null && _files.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.error_outline_rounded,
-                color: Colors.redAccent,
-                size: 48,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white70,
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: _loadReceivedFiles,
-                child: const Text('Try Again'),
-              ),
-            ],
-          ),
-        ),
-      );
+      return _buildErrorState();
     }
 
     if (_files.isEmpty) {
-      return RefreshIndicator(
-        onRefresh: _loadReceivedFiles,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
-            SizedBox(height: 100),
-            Icon(
-              Icons.inbox_rounded,
-              size: 76,
-              color: Colors.white38,
-            ),
-            SizedBox(height: 16),
-            Center(
-              child: Text(
-                'No received files yet.',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            SizedBox(height: 8),
-            Center(
-              child: Text(
-                'Connect to another phone to receive files.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white38,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
+      return _buildEmptyState();
     }
 
     return RefreshIndicator(
@@ -373,11 +411,22 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               subtitle: FutureBuilder<int>(
                 future: file.length(),
                 builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return const Text(
+                      'Unable to read file size',
+                      style: TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: 12,
+                      ),
+                    );
+                  }
+
                   if (!snapshot.hasData) {
                     return const Text(
                       'Reading file size...',
                       style: TextStyle(
                         color: Colors.white54,
+                        fontSize: 12,
                       ),
                     );
                   }
@@ -406,6 +455,41 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const green = Color(0xFF008D5A);
+    const dark = Color(0xFF202024);
+
+    return Scaffold(
+      backgroundColor: dark,
+      appBar: AppBar(
+        title: const Text('Receive Files'),
+        backgroundColor: green,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Refresh files',
+            onPressed: _loading ? null : _loadReceivedFiles,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(),
+            _buildConnectionButton(),
+            _buildFileHeading(),
+            const SizedBox(height: 12),
+            Expanded(
+              child: _buildFileList(),
+            ),
+          ],
+        ),
       ),
     );
   }
