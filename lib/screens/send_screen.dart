@@ -31,8 +31,15 @@ class _SendScreenState extends State<SendScreen> {
   final List<String> _failedFiles = [];
 
   bool _sending = false;
+
   double _progress = 0;
+  double _currentFileProgress = 0;
+
   String _status = '';
+  String _currentFileName = '';
+
+  int _currentFileSentBytes = 0;
+  int _currentFileTotalBytes = 0;
 
   int _sentCount = 0;
   int _totalBytes = 0;
@@ -190,9 +197,16 @@ class _SendScreenState extends State<SendScreen> {
     setState(() {
       _selectedFiles.clear();
       _failedFiles.clear();
+
       _progress = 0;
+      _currentFileProgress = 0;
+      _currentFileName = '';
+      _currentFileSentBytes = 0;
+      _currentFileTotalBytes = 0;
+
       _sentCount = 0;
       _totalBytes = 0;
+
       _status = 'An share jerin fayilolin da aka zaɓa.';
     });
   }
@@ -204,15 +218,23 @@ class _SendScreenState extends State<SendScreen> {
 
     setState(() {
       _sending = true;
+
       _progress = 0;
+      _currentFileProgress = 0;
+      _currentFileName = '';
+      _currentFileSentBytes = 0;
+      _currentFileTotalBytes = 0;
+
       _sentCount = 0;
       _totalBytes = 0;
+
       _status = 'Ana shirya aika fayiloli...';
       _failedFiles.clear();
     });
 
     var sent = 0;
     var failed = 0;
+
     final total = filesToSend.length;
 
     for (var index = 0; index < total; index++) {
@@ -222,7 +244,13 @@ class _SendScreenState extends State<SendScreen> {
 
       setState(() {
         _status = 'Ana aikawa: ${selected.name}';
+        _currentFileName = selected.name;
+
         _progress = index / total;
+
+        _currentFileProgress = 0;
+        _currentFileSentBytes = 0;
+        _currentFileTotalBytes = selected.size;
       });
 
       try {
@@ -239,6 +267,20 @@ class _SendScreenState extends State<SendScreen> {
           token: widget.receiverToken,
           filePath: selected.path,
           fileName: selected.name,
+          onProgress: (sentBytes, totalBytes) {
+            if (!mounted) return;
+
+            setState(() {
+              _currentFileSentBytes = sentBytes;
+              _currentFileTotalBytes = totalBytes;
+
+              _currentFileProgress = totalBytes > 0
+                  ? (sentBytes / totalBytes)
+                      .clamp(0.0, 1.0)
+                      .toDouble()
+                  : 0.0;
+            });
+          },
         );
 
         sent++;
@@ -269,6 +311,10 @@ class _SendScreenState extends State<SendScreen> {
     setState(() {
       _sending = false;
       _progress = 1;
+
+      _currentFileProgress = 0;
+      _currentFileSentBytes = 0;
+      _currentFileTotalBytes = 0;
 
       if (_failedFiles.isEmpty) {
         _status = 'An aika duk fayiloli cikin nasara!';
@@ -478,10 +524,12 @@ class _SendScreenState extends State<SendScreen> {
               ),
             ],
           ),
+
+          // Overall progress for all selected files.
           if (_sending || _progress > 0) ...[
             const SizedBox(height: 14),
             LinearProgressIndicator(
-              value: _progress.clamp(0.0, 1.0),
+              value: _progress.clamp(0.0, 1.0).toDouble(),
               color: green,
               backgroundColor: Colors.white12,
               minHeight: 6,
@@ -496,6 +544,39 @@ class _SendScreenState extends State<SendScreen> {
               ),
             ),
           ],
+
+          // Progress for the individual file being sent.
+          if (_sending) ...[
+            const SizedBox(height: 14),
+            Text(
+              'Fayil na yanzu: $_currentFileName',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: _currentFileProgress,
+              color: green,
+              backgroundColor: Colors.white12,
+              minHeight: 5,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${(_currentFileProgress * 100).round()}% — '
+              '${_formatSize(_currentFileSentBytes)} / '
+              '${_formatSize(_currentFileTotalBytes)}',
+              style: const TextStyle(
+                color: Colors.white60,
+                fontSize: 12,
+              ),
+            ),
+          ],
+
           if (_sentCount > 0) ...[
             const SizedBox(height: 8),
             Text(
@@ -507,6 +588,7 @@ class _SendScreenState extends State<SendScreen> {
               style: const TextStyle(color: Colors.white70),
             ),
           ],
+
           if (_failedFiles.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
@@ -567,9 +649,16 @@ class _SendScreenState extends State<SendScreen> {
         ..addAll(failedItems);
 
       _failedFiles.clear();
+
       _progress = 0;
+      _currentFileProgress = 0;
+      _currentFileName = '';
+      _currentFileSentBytes = 0;
+      _currentFileTotalBytes = 0;
+
       _sentCount = 0;
       _totalBytes = 0;
+
       _status = 'Ana sake aika fayilolin da suka gaza...';
     });
 
@@ -650,6 +739,7 @@ class _SendScreenState extends State<SendScreen> {
                 ],
               ),
             ),
+
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -688,6 +778,7 @@ class _SendScreenState extends State<SendScreen> {
                 ],
               ),
             ),
+
             if (_selectedFiles.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -713,7 +804,9 @@ class _SendScreenState extends State<SendScreen> {
                   ],
                 ),
               ),
+
             const SizedBox(height: 8),
+
             Expanded(
               child: _selectedFiles.isEmpty
                   ? Center(
@@ -758,6 +851,7 @@ class _SendScreenState extends State<SendScreen> {
                       },
                     ),
             ),
+
             if (_status.isNotEmpty) _buildProgressPanel(),
           ],
         ),
