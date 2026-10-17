@@ -23,7 +23,6 @@ class TransferService {
 
   HttpServer? _server;
   String? _sessionToken;
-
   Future<int>? _startingReceiver;
 
   bool get isServerRunning => _server != null;
@@ -33,8 +32,6 @@ class TransferService {
   int? get port => _server?.port;
 
   /// Starts the receiver server.
-  ///
-  /// Reuses an existing server or waits for an ongoing startup.
   Future<int> startReceiver() {
     final existingServer = _server;
 
@@ -113,6 +110,12 @@ class TransferService {
       }
 
       if (request.method == 'POST' &&
+          request.uri.path == '/connect') {
+        await _handleConnectionRequest(request);
+        return;
+      }
+
+      if (request.method == 'POST' &&
           request.uri.path == '/upload') {
         await _receiveFile(request);
         return;
@@ -144,7 +147,9 @@ class TransferService {
           await request.response.close();
         }
       } catch (responseError) {
-        debugPrint('Unable to close failed response: $responseError');
+        debugPrint(
+          'Unable to close failed response: $responseError',
+        );
       }
     }
   }
@@ -171,6 +176,111 @@ class TransferService {
         'version': 1,
       },
     );
+  }
+
+  /// Authenticates a sender using the token embedded in the receiver QR.
+  Future<void> _handleConnectionRequest(
+    HttpRequest request,
+  ) async {
+    final activeToken = _sessionToken;
+
+    if (activeToken == null) {
+      await _sendJson(
+        request.response,
+        HttpStatus.serviceUnavailable,
+        {
+          'success': false,
+          'error': 'Receiver is not running',
+        },
+      );
+      return;
+    }
+
+    try {
+      final body = await utf8.decoder
+          .bind(request)
+          .join()
+          .timeout(_connectionTimeout);
+
+      final decoded = jsonDecode(body);
+
+      if (decoded is! Map<String, dynamic>) {
+        await _sendJson(
+          request.response,
+          HttpStatus.badRequest,
+          {
+            'success': false,
+            'error': 'Invalid connection request',
+          },
+        );
+        return;
+      }
+
+      final suppliedToken = decoded['token'];
+      final requestedMode = decoded['mode'];
+
+      if (suppliedToken is! String ||
+          suppliedToken.isEmpty ||
+          suppliedToken != activeToken) {
+        await _sendJson(
+          request.response,
+          HttpStatus.unauthorized,
+          {
+            'success': false,
+            'error': 'Invalid session token',
+          },
+        );
+        return;
+      }
+
+      if (requestedMode != 'STANDARD' &&
+          requestedMode != '5G_PLUS') {
+        await _sendJson(
+          request.response,
+          HttpStatus.badRequest,
+          {
+            'success': false,
+            'error': 'Unsupported transfer mode',
+          },
+        );
+        return;
+      }
+
+      await _sendJson(
+        request.response,
+        HttpStatus.ok,
+        {
+          'success': true,
+          'connected': true,
+          'app': 'MAFX_SHARE',
+          'version': 1,
+          'mode': requestedMode,
+        },
+      );
+
+      debugPrint(
+        'MAFX SHARE authenticated sender connection '
+        'using $requestedMode mode.',
+      );
+    } on FormatException {
+      await _sendJson(
+        request.response,
+        HttpStatus.badRequest,
+        {
+          'success': false,
+          'error': 'Invalid connection data',
+        },
+      );
+    } on TimeoutException {
+      await _sendJson(
+        request.response,
+        HttpStatus.requestTimeout,
+        {
+          'success': false,
+          'error': 'Connection request timed out',
+        },
+      );
+    }
   }
 
   Future<void> _receiveFile(HttpRequest request) async {
@@ -207,7 +317,9 @@ class TransferService {
 
     final fileName = _sanitizeFileName(rawName);
 
-    if (fileName.isEmpty || fileName == '.' || fileName == '..') {
+    if (fileName.isEmpty ||
+        fileName == '.' ||
+        fileName == '..') {
       await _sendJson(
         request.response,
         HttpStatus.badRequest,
@@ -235,7 +347,6 @@ class TransferService {
     var completed = false;
 
     try {
-      // Exclusive creation prevents overwriting an existing file.
       final handle = await file.create(exclusive: true);
       sink = handle.openWrite();
 
@@ -308,6 +419,7 @@ class TransferService {
     );
   }
 
+  /// Checks whether the receiver server is reachable.
   Future<bool> checkReceiver(String baseUrl) async {
     HttpClient? client;
 
@@ -354,6 +466,89 @@ class TransferService {
     }
   }
 
+  /// Authenticates the sender with the receiver before file selection.
+  ///
+  /// The receiver must support POST /connect and validate the QR token.
+  Future<bool> connectToReceiver({
+    required String receiverUrl,
+    required String token,
+    required String mode,
+  }) async {
+    if (token.isEmpty) {
+      return false;
+    }
+
+    if (mode != 'STANDARD' && mode != '5G_PLUS') {
+      return false;
+    }
+
+    HttpClient? client;
+
+    try {
+      final baseUri = Uri.parse(receiverUrl);
+
+      if ((baseUri.scheme != 'http' &&
+              baseUri.scheme != 'https') ||
+          baseUri.host.isEmpty ||
+          baseUri.userInfo.isNotEmpty) {
+        return false;
+      }
+
+      client = HttpClient()
+        ..connectionTimeout = _sendConnectionTimeout;
+
+      final request = await client
+          .postUrl(baseUri.resolve('/connect'))
+          .timeout(_sendConnectionTimeout);
+
+      request.headers.contentType = ContentType.json;
+      request.headers.set(
+        HttpHeaders.cacheControlHeader,
+        'no-store',
+      );
+
+      request.write(jsonEncode({
+        'token': token,
+        'mode': mode,
+      }));
+
+      final response = await request
+          .close()
+          .timeout(_sendConnectionTimeout);
+
+      final body = await utf8.decoder
+          .bind(response)
+          .join()
+          .timeout(_connectionTimeout);
+
+      if (response.statusCode != HttpStatus.ok) {
+        debugPrint(
+          'Receiver authentication failed: '
+          '${response.statusCode}',
+        );
+        return false;
+      }
+
+      final decoded = jsonDecode(body);
+
+      if (decoded is! Map<String, dynamic>) {
+        return false;
+      }
+
+      return decoded['success'] == true &&
+          decoded['connected'] == true &&
+          decoded['app'] == 'MAFX_SHARE' &&
+          decoded['version'] == 1 &&
+          decoded['mode'] == mode;
+    } catch (error, stackTrace) {
+      debugPrint('Connection handshake failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return false;
+    } finally {
+      client?.close(force: true);
+    }
+  }
+
   Future<void> recordTransfer({
     required String fileName,
     required String direction,
@@ -390,8 +585,7 @@ class TransferService {
     final files = <File>[];
 
     await for (final entity in directory.list(followLinks: false)) {
-      if (entity is File &&
-          _isManagedReceivedFile(entity.path)) {
+      if (entity is File && _isManagedReceivedFile(entity.path)) {
         files.add(entity);
       }
     }
@@ -461,7 +655,9 @@ class TransferService {
 
     final safeName = _sanitizeFileName(fileName);
 
-    if (safeName.isEmpty || safeName == '.' || safeName == '..') {
+    if (safeName.isEmpty ||
+        safeName == '.' ||
+        safeName == '..') {
       throw Exception('Invalid file name: $fileName');
     }
 
@@ -525,22 +721,14 @@ class TransferService {
         );
       }
 
-      Map<String, dynamic> result;
+      final decoded = jsonDecode(body);
 
-      try {
-        final decoded = jsonDecode(body);
-
-        if (decoded is! Map<String, dynamic>) {
-          throw const FormatException('Invalid response.');
-        }
-
-        result = decoded;
-      } catch (_) {
+      if (decoded is! Map<String, dynamic>) {
         throw Exception('Receiver returned an invalid response.');
       }
 
-      if (result['success'] != true ||
-          result['bytes'] != fileSize) {
+      if (decoded['success'] != true ||
+          decoded['bytes'] != fileSize) {
         throw Exception(
           'Receiver did not confirm the complete file.',
         );
