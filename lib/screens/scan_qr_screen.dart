@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -15,6 +16,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       MobileScannerController();
 
   bool _hasScanned = false;
+  String? _errorMessage;
 
   @override
   void dispose() {
@@ -22,26 +24,45 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     super.dispose();
   }
 
+  bool _isValidIpv4(String value) {
+    final address = InternetAddress.tryParse(value);
+
+    return address != null &&
+        address.type == InternetAddressType.IPv4;
+  }
+
   void _handleDetection(BarcodeCapture capture) {
     if (_hasScanned) return;
 
     for (final barcode in capture.barcodes) {
       final value = barcode.rawValue;
-      if (value == null || value.isEmpty) continue;
+
+      if (value == null || value.trim().isEmpty) {
+        continue;
+      }
 
       try {
         final decoded = jsonDecode(value);
 
-        if (decoded is! Map<String, dynamic>) continue;
+        if (decoded is! Map<String, dynamic>) {
+          continue;
+        }
+
+        final ip = decoded['ip'];
+        final port = decoded['port'];
+        final token = decoded['token'];
+        final mode = decoded['mode'];
 
         final valid = decoded['app'] == 'MAFX_SHARE' &&
             decoded['version'] == 1 &&
-            decoded['ip'] is String &&
-            decoded['ip'].toString().isNotEmpty &&
-            decoded['port'] is int &&
-            decoded['token'] is String &&
-            decoded['token'].toString().isNotEmpty &&
-            ['STANDARD', '5G_PLUS'].contains(decoded['mode']);
+            ip is String &&
+            _isValidIpv4(ip) &&
+            port is int &&
+            port >= 1 &&
+            port <= 65535 &&
+            token is String &&
+            token.trim().isNotEmpty &&
+            ['STANDARD', '5G_PLUS'].contains(mode);
 
         if (!valid) continue;
 
@@ -50,11 +71,20 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
         if (!mounted) return;
 
-        Navigator.of(context).pop<Map<String, dynamic>>(decoded);
+        Navigator.of(context).pop<Map<String, dynamic>>(
+          Map<String, dynamic>.from(decoded),
+        );
         return;
       } catch (_) {
-        // Ignore invalid QR codes.
+        // Continue scanning when the QR code is invalid.
       }
+    }
+
+    if (mounted && !_hasScanned) {
+      setState(() {
+        _errorMessage =
+            'Wannan ba ingantaccen QR code na MAFX SHARE ba ne.';
+      });
     }
   }
 
@@ -65,12 +95,12 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         title: const Text('Scan MAFX QR'),
         actions: [
           IconButton(
-            tooltip: 'Switch camera',
+            tooltip: 'Canza camera',
             icon: const Icon(Icons.cameraswitch),
             onPressed: () => _controller.switchCamera(),
           ),
           IconButton(
-            tooltip: 'Flashlight',
+            tooltip: 'Hasken camera',
             icon: const Icon(Icons.flash_on),
             onPressed: () => _controller.toggleTorch(),
           ),
@@ -104,7 +134,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                   left: 24,
                   right: 24,
                   child: Text(
-                    'Point the camera at the receiver QR code.',
+                    'Ka nuna camera kan QR code na na\'urar da za a karɓa.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
@@ -115,11 +145,23 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.all(18),
-            child: Text(
-              'Scan a valid MAFX SHARE connection QR code.',
-              textAlign: TextAlign.center,
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              children: [
+                const Text(
+                  'Duba QR code na MAFX SHARE domin haɗa na\'urori.',
+                  textAlign: TextAlign.center,
+                ),
+                if (_errorMessage != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: Colors.red),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
             ),
           ),
         ],
