@@ -37,6 +37,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   bool _checkingReceiver = false;
 
   String _status = 'Ready to connect';
+  String _transferMode = 'STANDARD';
 
   String? _peerIp;
   String? _peerUrl;
@@ -395,6 +396,7 @@ class _ConnectScreenState extends State<ConnectScreen>
     final ip = ipValue.trim();
     final token = tokenValue.trim();
     final peerUrl = 'http://$ip:$portValue';
+    final mode = modeValue as String;
 
     setState(() {
       _loading = true;
@@ -402,45 +404,57 @@ class _ConnectScreenState extends State<ConnectScreen>
       _peerIp = null;
       _peerUrl = null;
       _peerToken = null;
-      _status = 'Verifying connection to $ip...';
+      _transferMode = 'STANDARD';
+      _status = 'Authenticating connection to $ip...';
     });
 
     try {
-      // Do not open file selection unless the receiver responds.
-      final reachable = await _service.checkReceiver(peerUrl);
+      // Authenticates the QR token before opening file selection.
+      final connected = await _service.connectToReceiver(
+        receiverUrl: peerUrl,
+        token: token,
+        mode: mode,
+      );
 
       if (!mounted) return;
 
-      if (!reachable) {
+      if (!connected) {
         setState(() {
           _connected = false;
           _peerIp = null;
           _peerUrl = null;
           _peerToken = null;
-          _status = 'Connection failed.';
+          _transferMode = 'STANDARD';
+          _status = 'Connection authentication failed.';
         });
 
         _message(
-          'Could not reach the other phone. '
-          'Check that both phones are connected to the same '
-          'Wi-Fi or hotspot and that the receiver is running.',
+          'Could not authenticate the receiver. '
+          'Make sure both phones are on the same Wi-Fi or hotspot '
+          'and that the receiver is running the updated app.',
         );
 
         return;
       }
 
-      // Save the connection only after the receiver check succeeds.
       setState(() {
         _connected = true;
         _peerIp = ip;
         _peerUrl = peerUrl;
         _peerToken = token;
-        _status = 'Connected successfully to $ip';
+        _transferMode = mode;
+        _status = mode == '5G_PLUS'
+            ? 'Connected successfully. 5G+ High-Speed Mode selected.'
+            : 'Connected successfully to $ip';
       });
 
-      _message('Connection verified successfully.');
+      _message(
+        mode == '5G_PLUS'
+            ? 'Connected. 5G+ High-Speed Mode selected.'
+            : 'Connection authenticated successfully.',
+      );
 
-      // Only the sending phone may open file selection.
+      // The file picker opens only after successful authentication.
       await _chooseFiles();
     } catch (error, stackTrace) {
       debugPrint('Connection failed: $error');
@@ -453,6 +467,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
+        _transferMode = 'STANDARD';
         _status = 'Connection failed.';
       });
 
@@ -477,6 +492,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     final receiverUrl = _peerUrl!;
     final receiverToken = _peerToken!;
+    final transferMode = _transferMode;
 
     await Navigator.push<void>(
       context,
@@ -485,6 +501,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           receiverUrl: receiverUrl,
           receiverToken: receiverToken,
           category: widget.category,
+          transferMode: transferMode,
         ),
       ),
     );
@@ -513,6 +530,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
+        _transferMode = 'STANDARD';
         _status = 'Receiver stopped.';
       });
 
@@ -601,7 +619,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
             Text(
               _isSender
-                  ? 'Scan the receiver QR code. File selection will open after the connection is verified.'
+                  ? 'Scan the receiver QR code. File selection will open after the connection is authenticated.'
                   : 'Prepare this phone first, then show its QR code to the sending phone.',
               textAlign: TextAlign.center,
               style: const TextStyle(
@@ -650,7 +668,7 @@ class _ConnectScreenState extends State<ConnectScreen>
               _ActionButton(
                 icon: Icons.qr_code_scanner_rounded,
                 title: _loading
-                    ? 'Verifying Connection...'
+                    ? 'Authenticating Connection...'
                     : 'Scan Receiver QR Code',
                 onPressed: _loading ? null : _scanQr,
               ),
@@ -658,7 +676,7 @@ class _ConnectScreenState extends State<ConnectScreen>
               const SizedBox(height: 12),
 
               const Text(
-                'Both phones must be connected to the same Wi-Fi network or hotspot. You can select files only after the receiver responds successfully.',
+                'Both phones must be connected to the same Wi-Fi network or hotspot. File selection opens only after the receiver authenticates the QR token.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white60,
@@ -702,6 +720,17 @@ class _ConnectScreenState extends State<ConnectScreen>
                       fontSize: 15,
                     ),
                   ),
+
+                  if (_connected) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Transfer mode: $_transferMode',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
 
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
@@ -759,10 +788,7 @@ class _ActionButton extends StatelessWidget {
       height: 58,
       child: FilledButton.icon(
         onPressed: onPressed,
-
-        // Fixed: display the icon passed into the button.
         icon: Icon(icon),
-
         label: Text(
           title,
           textAlign: TextAlign.center,
