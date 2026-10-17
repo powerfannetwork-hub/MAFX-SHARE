@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -32,13 +33,9 @@ class _SendScreenState extends State<SendScreen> {
   double _progress = 0;
   String _status = '';
 
-  String get _category =>
-      (widget.category ?? 'Files').toLowerCase();
+  final List<String> _failedFiles = [];
 
-  @override
-  void initState() {
-    super.initState();
-  }
+  String get _category => (widget.category ?? 'files').toLowerCase();
 
   Future<void> _pickFiles() async {
     if (_sending) return;
@@ -64,9 +61,8 @@ class _SendScreenState extends State<SendScreen> {
     }
 
     try {
-      final List<AssetEntity>? assets =
-          await Navigator.of(context).push<List<AssetEntity>>(
-        MaterialPageRoute(
+      final assets = await Navigator.of(context).push<List<AssetEntity>>(
+        MaterialPageRoute<List<AssetEntity>>(
           builder: (_) => MediaBrowserScreen(
             category: category,
             allowMultiple: true,
@@ -76,19 +72,18 @@ class _SendScreenState extends State<SendScreen> {
 
       if (assets == null || assets.isEmpty) return;
 
-      final List<_SelectedFile> newFiles = [];
+      final newFiles = <_SelectedFile>[];
 
       for (final asset in assets) {
-        final File? file = await asset.file;
+        final file = await asset.file;
 
         if (file == null || !await file.exists()) {
           continue;
         }
 
-        final String name =
-            asset.title?.trim().isNotEmpty == true
-                ? asset.title!
-                : 'media_${asset.id}';
+        final name = asset.title?.trim().isNotEmpty == true
+            ? asset.title!
+            : 'media_${asset.id}';
 
         newFiles.add(
           _SelectedFile(
@@ -101,23 +96,12 @@ class _SendScreenState extends State<SendScreen> {
 
       if (!mounted) return;
 
-      setState(() {
-        for (final file in newFiles) {
-          final alreadyAdded = _selectedFiles.any(
-            (item) => item.path == file.path,
-          );
+      _addFiles(newFiles);
+    } catch (error, stackTrace) {
+      debugPrint('Media selection failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
 
-          if (!alreadyAdded) {
-            _selectedFiles.add(file);
-          }
-        }
-
-        _status = newFiles.isEmpty
-            ? 'Ba a sami fayilolin da za a iya amfani da su ba.'
-            : 'An zaɓi fayiloli ${newFiles.length}.';
-      });
-    } catch (e) {
-      _showMessage('An kasa buɗe media browser: $e');
+      _showMessage('An kasa buɗe media browser: $error');
     }
   }
 
@@ -131,12 +115,15 @@ class _SendScreenState extends State<SendScreen> {
 
       if (result == null) return;
 
-      final List<_SelectedFile> newFiles = [];
+      final newFiles = <_SelectedFile>[];
 
       for (final file in result.files) {
         final path = file.path;
 
-        if (path == null) continue;
+        if (path == null) {
+          debugPrint('No accessible path for ${file.name}');
+          continue;
+        }
 
         newFiles.add(
           _SelectedFile(
@@ -149,25 +136,39 @@ class _SendScreenState extends State<SendScreen> {
 
       if (!mounted) return;
 
-      setState(() {
-        for (final file in newFiles) {
-          final alreadyAdded = _selectedFiles.any(
-            (item) => item.path == file.path,
-          );
+      _addFiles(newFiles);
+    } catch (error, stackTrace) {
+      debugPrint('File selection failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
 
-          if (!alreadyAdded) {
-            _selectedFiles.add(file);
-          }
-        }
-
-        _status = 'An ƙara fayiloli ${newFiles.length}.';
-      });
-    } catch (e) {
-      _showMessage('An kasa zaɓar fayiloli: $e');
+      _showMessage('An kasa zaɓar fayiloli: $error');
     }
   }
 
+  void _addFiles(List<_SelectedFile> files) {
+    var added = 0;
+
+    setState(() {
+      for (final file in files) {
+        final alreadyAdded = _selectedFiles.any(
+          (item) => item.path == file.path,
+        );
+
+        if (!alreadyAdded) {
+          _selectedFiles.add(file);
+          added++;
+        }
+      }
+
+      _status = added == 0
+          ? 'Babu sabon fayil da aka ƙara.'
+          : 'An ƙara fayiloli $added.';
+    });
+  }
+
   void _removeFile(_SelectedFile file) {
+    if (_sending) return;
+
     setState(() {
       _selectedFiles.remove(file);
     });
@@ -176,84 +177,81 @@ class _SendScreenState extends State<SendScreen> {
   Future<void> _sendFiles() async {
     if (_sending || _selectedFiles.isEmpty) return;
 
+    final filesToSend = List<_SelectedFile>.from(_selectedFiles);
+
     setState(() {
       _sending = true;
       _progress = 0;
       _status = 'Ana fara aikawa...';
+      _failedFiles.clear();
     });
 
-    int sent = 0;
-    final int total = _selectedFiles.length;
-    final List<String> failedFiles = [];
+    var sent = 0;
+    final total = filesToSend.length;
 
-    try {
-      for (final selected in List<_SelectedFile>.from(_selectedFiles)) {
-        if (!mounted) return;
+    for (var index = 0; index < total; index++) {
+      if (!mounted) return;
 
-        setState(() {
-          _status = 'Ana aikawa: ${selected.name}';
-          _progress = sent / total;
-        });
+      final selected = filesToSend[index];
 
+      setState(() {
+        _status = 'Ana aikawa: ${selected.name}';
+        _progress = index / total;
+      });
+
+      try {
         final file = File(selected.path);
 
         if (!await file.exists()) {
-          failedFiles.add(selected.name);
-          continue;
+          throw Exception('Ba a sami fayil ɗin a wayar ba.');
         }
 
-        try {
-          await _transferService.sendFile(
-            receiverUrl: widget.receiverUrl,
-            token: widget.receiverToken,
-            filePath: selected.path,
-            fileName: selected.name,
-          );
+        await _transferService.sendFile(
+          receiverUrl: widget.receiverUrl,
+          token: widget.receiverToken,
+          filePath: selected.path,
+          fileName: selected.name,
+        );
 
-          sent++;
-        } catch (_) {
-          failedFiles.add(selected.name);
-        }
+        sent++;
+      } catch (error, stackTrace) {
+        debugPrint('Failed to send ${selected.name}: $error');
+        debugPrintStack(stackTrace: stackTrace);
 
-        if (!mounted) return;
-
-        setState(() {
-          _progress = (sent + failedFiles.length) / total;
-        });
+        _failedFiles.add(selected.name);
       }
 
       if (!mounted) return;
 
       setState(() {
-        _status = failedFiles.isEmpty
-            ? 'An aika duk fayiloli cikin nasara!'
-            : 'An aika $sent daga $total. '
-                'Fayilolin da suka gaza: ${failedFiles.length}.';
+        _progress = (index + 1) / total;
+      });
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      if (_failedFiles.isEmpty) {
+        _status = 'An aika duk fayiloli cikin nasara!';
+      } else {
+        _status = 'An aika $sent daga $total. '
+            'Fayilolin da suka gaza: ${_failedFiles.length}.';
+      }
+
+      _sending = false;
+    });
+
+    if (_failedFiles.isEmpty) {
+      setState(() {
+        _selectedFiles.clear();
       });
 
-      if (failedFiles.isEmpty) {
-        _showMessage('An aika duk fayiloli cikin nasara!');
-        setState(() {
-          _selectedFiles.clear();
-        });
-      } else {
-        _showMessage(
-          'An aika $sent daga $total fayiloli. '
-          'Duba fayilolin da suka gaza.',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _status = 'An samu matsala yayin aikawa: $e';
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _sending = false;
-        });
-      }
+      _showMessage('An aika duk fayiloli cikin nasara!');
+    } else {
+      _showMessage(
+        'An aika $sent daga $total fayiloli. '
+        'Duba jerin fayilolin da suka gaza.',
+      );
     }
   }
 
@@ -261,7 +259,10 @@ class _SendScreenState extends State<SendScreen> {
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -282,35 +283,47 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   IconData _fileIcon(String name) {
-    final extension = name.split('.').last.toLowerCase();
+    final extension = name.contains('.')
+        ? name.split('.').last.toLowerCase()
+        : '';
 
     switch (extension) {
       case 'jpg':
       case 'jpeg':
       case 'png':
       case 'webp':
-        return Icons.image;
+      case 'gif':
+        return Icons.image_rounded;
+
       case 'mp4':
       case 'mkv':
       case 'mov':
       case 'avi':
-        return Icons.video_file;
+      case 'webm':
+        return Icons.video_file_rounded;
+
       case 'mp3':
       case 'm4a':
       case 'wav':
       case 'aac':
-        return Icons.audio_file;
+      case 'flac':
+        return Icons.audio_file_rounded;
+
       case 'apk':
-        return Icons.android;
+        return Icons.android_rounded;
+
       case 'pdf':
-        return Icons.picture_as_pdf;
+        return Icons.picture_as_pdf_rounded;
+
       default:
-        return Icons.insert_drive_file;
+        return Icons.insert_drive_file_rounded;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    const green = Color(0xFF00D084);
+
     return Scaffold(
       backgroundColor: const Color(0xFF101820),
       appBar: AppBar(
@@ -330,10 +343,7 @@ class _SendScreenState extends State<SendScreen> {
                 children: [
                   const Row(
                     children: [
-                      Icon(
-                        Icons.devices,
-                        color: Color(0xFF00D084),
-                      ),
+                      Icon(Icons.devices, color: green),
                       SizedBox(width: 8),
                       Text(
                         'MAFX SHARE',
@@ -347,20 +357,22 @@ class _SendScreenState extends State<SendScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
+                    'Receiver: ${widget.receiverUrl}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
                     'Category: ${widget.category ?? 'Files'}',
                     style: const TextStyle(color: Colors.white70),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${_selectedFiles.length} file(s) selected',
-                    style: const TextStyle(
-                      color: Color(0xFF00D084),
-                    ),
+                    style: const TextStyle(color: green),
                   ),
                 ],
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -371,60 +383,42 @@ class _SendScreenState extends State<SendScreen> {
                       icon: const Icon(Icons.add),
                       label: const Text('Add Files'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF00D084),
-                        side: const BorderSide(
-                          color: Color(0xFF00D084),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 14,
-                        ),
+                        foregroundColor: green,
+                        side: const BorderSide(color: green),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed:
-                          _sending || _selectedFiles.isEmpty
-                              ? null
-                              : _sendFiles,
+                      onPressed: _sending || _selectedFiles.isEmpty
+                          ? null
+                          : _sendFiles,
                       icon: const Icon(Icons.send),
                       label: const Text('Send Now'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00D084),
+                        backgroundColor: green,
                         foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 14,
-                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-
-            if (_sending || _progress > 0)
+            if (_sending || _progress > 0) ...[
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    LinearProgressIndicator(
-                      value: _progress.clamp(0.0, 1.0),
-                      color: const Color(0xFF00D084),
-                      backgroundColor: Colors.white12,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _status,
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
+                child: LinearProgressIndicator(
+                  value: _progress.clamp(0.0, 1.0),
+                  color: green,
+                  backgroundColor: Colors.white12,
                 ),
               ),
-
-            if (_status.isNotEmpty && !_sending)
+              const SizedBox(height: 8),
+            ],
+            if (_status.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Align(
@@ -435,9 +429,37 @@ class _SendScreenState extends State<SendScreen> {
                   ),
                 ),
               ),
-
+            if (_failedFiles.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Failed files',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      for (final name in _failedFiles)
+                        Text(
+                          name,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             const Divider(color: Colors.white12),
-
             Expanded(
               child: _selectedFiles.isEmpty
                   ? const Center(
@@ -452,10 +474,7 @@ class _SendScreenState extends State<SendScreen> {
                           SizedBox(height: 12),
                           Text(
                             'No files selected',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 16,
-                            ),
+                            style: TextStyle(color: Colors.white70),
                           ),
                           SizedBox(height: 6),
                           Text(
@@ -473,7 +492,7 @@ class _SendScreenState extends State<SendScreen> {
                         return ListTile(
                           leading: Icon(
                             _fileIcon(file.name),
-                            color: const Color(0xFF00D084),
+                            color: green,
                             size: 32,
                           ),
                           title: Text(
@@ -484,9 +503,7 @@ class _SendScreenState extends State<SendScreen> {
                           ),
                           subtitle: Text(
                             _formatSize(file.size),
-                            style: const TextStyle(
-                              color: Colors.white54,
-                            ),
+                            style: const TextStyle(color: Colors.white54),
                           ),
                           trailing: IconButton(
                             onPressed: _sending
