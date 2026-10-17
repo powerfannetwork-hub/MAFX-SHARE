@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -20,185 +22,171 @@ class SendScreen extends StatefulWidget {
 }
 
 class _SendScreenState extends State<SendScreen> {
+  static const Color green = Color(0xFF008D5A);
+  static const Color accent = Color(0xFF00D18B);
+  static const Color background = Color(0xFF19191D);
+  static const Color surface = Color(0xFF29292F);
+
   final TransferService _transferService = TransferService.instance;
 
-  List<PlatformFile> _files = [];
+  final List<PlatformFile> _files = [];
 
-  bool _isPicking = false;
-  bool _isSending = false;
+  bool _picking = false;
+  bool _sending = false;
 
+  int _currentIndex = 0;
   int _sentCount = 0;
   int _failedCount = 0;
 
   String get _category =>
-      widget.category?.trim().toLowerCase() ?? 'files';
+      widget.category?.toLowerCase().trim() ?? 'files';
 
-  String get _screenTitle {
-    if (widget.category == null) {
-      return 'Send Files';
+  String get _title {
+    switch (_category) {
+      case 'apps':
+        return 'Send Apps';
+      case 'photos':
+        return 'Send Photos';
+      case 'videos':
+        return 'Send Videos';
+      case 'music':
+        return 'Send Music';
+      default:
+        return 'Send Files';
     }
-
-    return 'Send ${widget.category}';
   }
 
   IconData get _categoryIcon {
     switch (_category) {
+      case 'apps':
+        return Icons.apps_rounded;
       case 'photos':
         return Icons.photo_library_rounded;
       case 'videos':
         return Icons.video_library_rounded;
       case 'music':
         return Icons.music_note_rounded;
-      case 'apps':
-        return Icons.apps_rounded;
       default:
         return Icons.folder_rounded;
     }
   }
 
-  List<String> get _allowedExtensions {
+  List<String>? get _extensions {
     switch (_category) {
       case 'photos':
         return [
-          'jpg',
-          'jpeg',
-          'png',
-          'gif',
-          'webp',
-          'bmp',
-          'heic',
-          'heif',
-          'tif',
-          'tiff',
+          'jpg', 'jpeg', 'png', 'gif', 'webp',
+          'bmp', 'heic', 'heif',
         ];
-
       case 'videos':
         return [
-          'mp4',
-          'm4v',
-          'mov',
-          'avi',
-          'mkv',
-          'webm',
-          '3gp',
-          'mpeg',
-          'mpg',
+          'mp4', 'm4v', 'mov', 'avi', 'mkv',
+          'webm', '3gp', 'mpeg', 'mpg',
         ];
-
       case 'music':
         return [
-          'mp3',
-          'm4a',
-          'aac',
-          'wav',
-          'ogg',
-          'flac',
-          'wma',
-          'opus',
-          'amr',
+          'mp3', 'm4a', 'aac', 'wav', 'ogg',
+          'flac', 'wma', 'opus', 'amr',
         ];
-
       case 'apps':
-        return [
-          'apk',
-          'xapk',
-          'apks',
-        ];
-
+        return ['apk', 'xapk', 'apks'];
       default:
-        return [];
+        return null;
     }
   }
 
-  Future<void> _pickFiles() async {
-    if (_isPicking || _isSending) return;
+  int get _totalBytes =>
+      _files.fold(0, (total, file) => total + file.size);
 
-    setState(() {
-      _isPicking = true;
-    });
+  double get _progress {
+    if (_files.isEmpty) return 0;
+
+    return (_sentCount + _failedCount) / _files.length;
+  }
+
+  Future<void> _pickFiles() async {
+    if (_picking || _sending) return;
+
+    setState(() => _picking = true);
 
     try {
-      final extensions = _allowedExtensions;
+      final extensions = _extensions;
 
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
-        type: extensions.isEmpty ? FileType.any : FileType.custom,
-        allowedExtensions: extensions.isEmpty ? null : extensions,
+        type: extensions == null ? FileType.any : FileType.custom,
+        allowedExtensions: extensions,
         withData: false,
       );
 
       if (!mounted || result == null) return;
 
-      final existingPaths = _files
+      final knownPaths = _files
           .map((file) => file.path)
           .whereType<String>()
           .toSet();
 
-      final newFiles = result.files.where((file) {
+      final knownNames = _files.map((file) => file.name).toSet();
+
+      final additions = result.files.where((file) {
         final path = file.path;
 
-        if (path == null || path.isEmpty) {
-          return true;
+        if (path != null && path.isNotEmpty) {
+          return !knownPaths.contains(path);
         }
 
-        return !existingPaths.contains(path);
+        return !knownNames.contains(file.name);
       }).toList();
 
       setState(() {
-        _files.addAll(newFiles);
+        _files.addAll(additions);
       });
 
-      if (newFiles.isEmpty && result.files.isNotEmpty) {
-        _showMessage('These files have already been selected.');
+      if (additions.isEmpty) {
+        _showMessage('No new files were added.');
       }
     } catch (error) {
-      if (mounted) {
-        _showMessage('Unable to select files: $error');
-      }
+      _showMessage('Unable to open file picker: $error');
     } finally {
       if (mounted) {
-        setState(() {
-          _isPicking = false;
-        });
+        setState(() => _picking = false);
       }
     }
   }
 
   Future<void> _sendFiles() async {
-    if (_isSending) return;
+    if (_sending || _files.isEmpty) return;
 
-    if (_files.isEmpty) {
-      _showMessage('Choose at least one file first.');
-      return;
-    }
+    final missingPaths = _files.any(
+      (file) => file.path == null || file.path!.isEmpty,
+    );
 
-    final invalidFiles = _files.where((file) {
-      final path = file.path;
-      return path == null || path.isEmpty;
-    }).toList();
-
-    if (invalidFiles.isNotEmpty) {
+    if (missingPaths) {
       _showMessage(
-        'Some files cannot be accessed. Remove them and select them again.',
+        'Some files cannot be accessed. Select them again.',
       );
       return;
     }
 
     setState(() {
-      _isSending = true;
+      _sending = true;
+      _currentIndex = 0;
       _sentCount = 0;
       _failedCount = 0;
     });
 
-    for (final file in List<PlatformFile>.from(_files)) {
+    final selectedFiles = List<PlatformFile>.from(_files);
+
+    for (var index = 0; index < selectedFiles.length; index++) {
       if (!mounted) return;
 
+      final file = selectedFiles[index];
       final path = file.path;
 
+      setState(() => _currentIndex = index);
+
       if (path == null || path.isEmpty) {
-        setState(() {
-          _failedCount++;
-        });
+        setState(() => _failedCount++);
         continue;
       }
 
@@ -212,49 +200,33 @@ class _SendScreenState extends State<SendScreen> {
 
         if (!mounted) return;
 
-        setState(() {
-          _sentCount++;
-        });
+        setState(() => _sentCount++);
       } catch (error) {
         debugPrint('Failed to send ${file.name}: $error');
 
         if (!mounted) return;
 
-        setState(() {
-          _failedCount++;
-        });
+        setState(() => _failedCount++);
       }
     }
 
     if (!mounted) return;
 
-    setState(() {
-      _isSending = false;
-    });
+    setState(() => _sending = false);
 
     if (_failedCount == 0) {
-      _showMessage('All selected files were sent successfully.');
+      _showMessage('All files sent successfully.');
     } else {
       _showMessage(
-        'Transfer finished: $_sentCount sent, $_failedCount failed.',
+        'Finished: $_sentCount sent, $_failedCount failed.',
       );
     }
   }
 
   void _removeFile(int index) {
-    if (_isSending) return;
+    if (_sending) return;
 
-    setState(() {
-      _files.removeAt(index);
-    });
-  }
-
-  void _clearFiles() {
-    if (_isSending) return;
-
-    setState(() {
-      _files.clear();
-    });
+    setState(() => _files.removeAt(index));
   }
 
   void _showMessage(String message) {
@@ -268,10 +240,8 @@ class _SendScreenState extends State<SendScreen> {
     );
   }
 
-  String _formatSize(int bytes) {
-    if (bytes < 1024) {
-      return '$bytes B';
-    }
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
 
     if (bytes < 1024 * 1024) {
       return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -284,59 +254,59 @@ class _SendScreenState extends State<SendScreen> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  int get _totalSize {
-    return _files.fold<int>(
-      0,
-      (total, file) => total + file.size,
-    );
-  }
-
   Widget _buildEmptyState() {
-    String message;
-
-    switch (_category) {
-      case 'photos':
-        message = 'Select photos to share.';
-        break;
-      case 'videos':
-        message = 'Select videos to share.';
-        break;
-      case 'music':
-        message = 'Select music files to share.';
-        break;
-      case 'apps':
-        message = 'Select APK or supported app package files.';
-        break;
-      default:
-        message = 'Select files to share.';
-    }
-
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              _categoryIcon,
-              size: 82,
-              color: const Color(0xFF00AEEF),
+            Container(
+              width: 110,
+              height: 110,
+              decoration: BoxDecoration(
+                color: green.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                _categoryIcon,
+                size: 58,
+                color: accent,
+              ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 22),
             Text(
-              message,
-              textAlign: TextAlign.center,
+              _title,
               style: const TextStyle(
-                fontSize: 20,
+                color: Colors.white,
+                fontSize: 24,
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
+            const Text(
+              'Choose the items you want to share '
+              'with the connected phone.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white60,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 26),
             FilledButton.icon(
-              onPressed: _isPicking || _isSending ? null : _pickFiles,
-              icon: const Icon(Icons.add),
+              onPressed: _picking ? null : _pickFiles,
+              icon: const Icon(Icons.add_rounded),
               label: Text(
-                _isPicking ? 'Opening...' : 'Choose Files',
+                _picking ? 'Opening...' : 'Choose Files',
+              ),
+              style: FilledButton.styleFrom(
+                backgroundColor: green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 26,
+                  vertical: 15,
+                ),
               ),
             ),
           ],
@@ -345,118 +315,254 @@ class _SendScreenState extends State<SendScreen> {
     );
   }
 
-  Widget _buildFileList() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
+  Widget _buildSelectedFiles() {
+    return Column(
       children: [
-        Text(
-          '${_files.length} file(s) selected',
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text('Total size: ${_formatSize(_totalSize)}'),
-        const SizedBox(height: 14),
-        ...List.generate(_files.length, (index) {
-          final file = _files[index];
-
-          return Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: ListTile(
-              leading: Icon(_categoryIcon),
-              title: Text(
-                file.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+        Container(
+          color: surface,
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.check_circle_rounded,
+                color: accent,
+                size: 30,
               ),
-              subtitle: Text(_formatSize(file.size)),
-              trailing: IconButton(
-                onPressed: _isSending ? null : () => _removeFile(index),
-                icon: const Icon(
-                  Icons.close,
-                  color: Colors.red,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${_files.length} selected',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Total size: ${_formatBytes(_totalBytes)}',
+                      style: const TextStyle(
+                        color: Colors.white60,
+                      ),
+                    ),
+                  ],
                 ),
-                tooltip: 'Remove file',
               ),
-            ),
-          );
-        }),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _isPicking || _isSending ? null : _pickFiles,
-          icon: const Icon(Icons.add),
-          label: const Text('Add More Files'),
+              IconButton(
+                onPressed: _sending
+                    ? null
+                    : () => setState(() => _files.clear()),
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.white70,
+                ),
+                tooltip: 'Clear selection',
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _files.isEmpty || _isSending ? null : _clearFiles,
-          icon: const Icon(Icons.delete_outline),
-          label: const Text('Clear Selection'),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.all(14),
+            itemCount: _files.length,
+            separatorBuilder: (_, __) =>
+                const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final file = _files[index];
+
+              return Container(
+                decoration: BoxDecoration(
+                  color: surface,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: ListTile(
+                  leading: Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: green.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      _categoryIcon,
+                      color: accent,
+                    ),
+                  ),
+                  title: Text(
+                    file.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  subtitle: Text(
+                    _formatBytes(file.size),
+                    style: const TextStyle(
+                      color: Colors.white60,
+                    ),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Remove file',
+                    onPressed: _sending
+                        ? null
+                        : () => _removeFile(index),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
         ),
-        if (_isSending || _sentCount > 0 || _failedCount > 0) ...[
-          const SizedBox(height: 18),
-          Text(
-            'Sent: $_sentCount    Failed: $_failedCount',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: OutlinedButton.icon(
+            onPressed: _picking || _sending ? null : _pickFiles,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add More Files'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: accent,
+              side: const BorderSide(color: accent),
+              minimumSize: const Size(double.infinity, 48),
             ),
           ),
-          if (_isSending) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(),
-            const SizedBox(height: 8),
-            const Text(
-              'Sending files. Please keep the app open.',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ],
+        ),
+        const SizedBox(height: 12),
       ],
+    );
+  }
+
+  Widget _buildProgress() {
+    if (!_sending && _sentCount == 0 && _failedCount == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Transfer progress',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Text(
+                '${(_progress * 100).round()}%',
+                style: const TextStyle(
+                  color: accent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          LinearProgressIndicator(
+            value: _sending ? _progress : 1,
+            backgroundColor: Colors.white12,
+            color: accent,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Sent: $_sentCount   Failed: $_failedCount',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          if (_sending && _currentIndex < _files.length)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Sending: ${_files[_currentIndex].name}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white60),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: background,
       appBar: AppBar(
-        title: Text(_screenTitle),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _files.isEmpty ? _buildEmptyState() : _buildFileList(),
+        backgroundColor: green,
+        foregroundColor: Colors.white,
+        title: Text(_title),
+        actions: [
+          IconButton(
+            tooltip: 'Choose files',
+            onPressed: _picking || _sending ? null : _pickFiles,
+            icon: const Icon(Icons.add_rounded),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: _files.isEmpty
+                  ? _buildEmptyState()
+                  : _buildSelectedFiles(),
+            ),
+            _buildProgress(),
+            Padding(
               padding: const EdgeInsets.all(16),
               child: SizedBox(
                 width: double.infinity,
-                height: 52,
+                height: 56,
                 child: FilledButton.icon(
-                  onPressed: _files.isEmpty || _isSending || _isPicking
+                  onPressed: _files.isEmpty || _sending || _picking
                       ? null
                       : _sendFiles,
-                  icon: _isSending
+                  icon: _sending
                       ? const SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
+                            color: Colors.white,
                           ),
                         )
                       : const Icon(Icons.send_rounded),
                   label: Text(
-                    _isSending ? 'Sending...' : 'Send Files',
+                    _sending
+                        ? 'Sending files...'
+                        : 'SEND ${_files.isEmpty ? '' : '(${_files.length})'}',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: green,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.white12,
+                    disabledForegroundColor: Colors.white38,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
