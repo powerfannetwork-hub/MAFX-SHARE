@@ -759,10 +759,10 @@ class _ActionButton extends StatelessWidget {
       height: 58,
       child: FilledButton.icon(
         onPressed: onPressed,
-        icon: Icon(
-          Icons.circle,
-          size: 0,
-        ),
+
+        // Fixed: display the icon passed into the button.
+        icon: Icon(icon),
+
         label: Text(
           title,
           textAlign: TextAlign.center,
