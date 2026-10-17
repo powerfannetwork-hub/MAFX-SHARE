@@ -220,17 +220,7 @@ class TransferService {
       return;
     }
 
-    if (request.contentLength == 0) {
-      await _sendJson(
-        request.response,
-        HttpStatus.badRequest,
-        {
-          'success': false,
-          'error': 'Empty file',
-        },
-      );
-      return;
-    }
+    final expectedLength = request.contentLength;
 
     final directory = await getApplicationDocumentsDirectory();
     final timestamp = DateTime.now().microsecondsSinceEpoch;
@@ -255,8 +245,10 @@ class TransferService {
 
       final bytes = await file.length();
 
-      if (bytes == 0) {
-        throw const FormatException('Received file is empty.');
+      if (expectedLength >= 0 && bytes != expectedLength) {
+        throw const FormatException(
+          'Received file size does not match the expected size.',
+        );
       }
 
       await recordTransfer(
@@ -385,6 +377,31 @@ class TransferService {
     await prefs.setStringList(_historyKey, entries);
   }
 
+  /// Returns files saved by MAFX SHARE in its documents directory.
+  Future<List<File>> getReceivedFiles() async {
+    final directory = await getApplicationDocumentsDirectory();
+
+    if (!await directory.exists()) {
+      return [];
+    }
+
+    final files = <File>[];
+
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is File) {
+        files.add(entity);
+      }
+    }
+
+    files.sort((a, b) {
+      return b.lastModifiedSync().compareTo(
+        a.lastModifiedSync(),
+      );
+    });
+
+    return files;
+  }
+
   Future<void> stopReceiver() async {
     final server = _server;
 
@@ -402,12 +419,12 @@ class TransferService {
   }
 
   Future<bool> sendFile({
-  required String receiverUrl,
-  required String token,
-  required String filePath,
-  required String fileName,
-  void Function(int sentBytes, int totalBytes)? onProgress,
-}) async {
+    required String receiverUrl,
+    required String token,
+    required String filePath,
+    required String fileName,
+    void Function(int sentBytes, int totalBytes)? onProgress,
+  }) async {
     final file = File(filePath);
 
     if (!await file.exists()) {
@@ -451,18 +468,19 @@ class TransferService {
 
       var sentBytes = 0;
 
-final stream = file.openRead().map((chunk) {
-  sentBytes += chunk.length;
+      final stream = file.openRead().map((chunk) {
+        sentBytes += chunk.length;
 
-  onProgress?.call(
-    sentBytes,
-    fileSize,
-  );
+        onProgress?.call(
+          sentBytes,
+          fileSize,
+        );
 
-  return chunk;
-});
+        return chunk;
+      });
 
-await request.addStream(stream).timeout(_transferTimeout);
+      await request.addStream(stream).timeout(_transferTimeout);
+
       final response = await request
           .close()
           .timeout(_transferTimeout);
