@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -26,12 +27,14 @@ class ConnectScreen extends StatefulWidget {
   State<ConnectScreen> createState() => _ConnectScreenState();
 }
 
-class _ConnectScreenState extends State<ConnectScreen> {
+class _ConnectScreenState extends State<ConnectScreen>
+    with WidgetsBindingObserver {
   final TransferService _service = TransferService.instance;
 
   bool _loading = false;
   bool _receiverStarted = false;
   bool _connected = false;
+  bool _checkingReceiver = false;
 
   String _status = 'Ready to connect';
 
@@ -42,6 +45,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   int? _localPort;
 
+  Timer? _receiverMonitor;
+
   String? get _localToken => _service.sessionToken;
 
   bool get _isSender => widget.role == TransferRole.send;
@@ -49,6 +54,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
 
     _status = _isSender
         ? 'Scan the receiver QR code to connect.'
@@ -131,6 +138,84 @@ class _ConnectScreenState extends State<ConnectScreen> {
     }
   }
 
+  void _startReceiverMonitor() {
+    _receiverMonitor?.cancel();
+
+    _receiverMonitor = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _checkReceiverStatus(),
+    );
+  }
+
+  void _stopReceiverMonitor() {
+    _receiverMonitor?.cancel();
+    _receiverMonitor = null;
+  }
+
+  Future<void> _checkReceiverStatus() async {
+    if (!mounted ||
+        !_receiverStarted ||
+        _checkingReceiver ||
+        _loading) {
+      return;
+    }
+
+    _checkingReceiver = true;
+
+    try {
+      final serverRunning = _service.isServerRunning;
+
+      if (!serverRunning) {
+        if (!mounted) return;
+
+        setState(() {
+          _receiverStarted = false;
+          _localPort = null;
+          _localIp = null;
+          _connected = false;
+          _peerIp = null;
+          _peerUrl = null;
+          _peerToken = null;
+          _status = 'Receiver stopped. Prepare it again.';
+        });
+
+        _stopReceiverMonitor();
+        return;
+      }
+
+      final currentIp = await _getLocalIp();
+
+      if (!mounted) return;
+
+      if (currentIp == null) {
+        if (_status != 'Network unavailable. Check Wi-Fi.') {
+          setState(() {
+            _status = 'Network unavailable. Check Wi-Fi.';
+            _connected = false;
+          });
+        }
+        return;
+      }
+
+      if (currentIp != _localIp) {
+        setState(() {
+          _localIp = currentIp;
+          _status =
+              'Network changed. Show the updated QR code.';
+          _connected = false;
+          _peerIp = null;
+          _peerUrl = null;
+          _peerToken = null;
+        });
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Receiver status check failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    } finally {
+      _checkingReceiver = false;
+    }
+  }
+
   Future<void> _prepareReceiver() async {
     if (_loading || _receiverStarted) return;
 
@@ -174,6 +259,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
         _status = 'Receiver ready. Waiting for the other phone.';
       });
 
+      _startReceiverMonitor();
+
       _message('Receiver is ready.');
     } catch (error, stackTrace) {
       debugPrint('Receiver startup failed: $error');
@@ -199,38 +286,76 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   Future<void> _showMyQr() async {
+    if (_loading) return;
+
     if (!_receiverStarted ||
         _localPort == null ||
-        _localToken == null) {
+        _localToken == null ||
+        !_service.isServerRunning) {
+      setState(() {
+        _receiverStarted = false;
+        _localPort = null;
+        _localIp = null;
+        _status = 'Receiver is not running. Prepare it again.';
+      });
+
       _message('Prepare the receiver first.');
       return;
     }
 
-    // Refresh the IP in case the Wi-Fi network changed.
-    final ip = await _getLocalIp();
-
-    if (!mounted) return;
-
-    if (ip == null) {
-      _message('Could not find the phone IP address.');
-      return;
-    }
-
     setState(() {
-      _localIp = ip;
+      _loading = true;
+      _status = 'Checking network...';
     });
 
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => QrScreen(
-          ipAddress: ip,
-          port: _localPort!,
-          token: _localToken!,
-          mode: 'STANDARD',
+    try {
+      final ip = await _getLocalIp();
+
+      if (!mounted) return;
+
+      if (ip == null) {
+        setState(() {
+          _status = 'Network unavailable. Check Wi-Fi.';
+        });
+
+        _message('Could not find the phone IP address.');
+        return;
+      }
+
+      setState(() {
+        _localIp = ip;
+        _status = 'Receiver ready. Show this QR code to connect.';
+      });
+
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => QrScreen(
+            ipAddress: ip,
+            port: _localPort!,
+            token: _localToken!,
+            mode: 'STANDARD',
+          ),
         ),
-      ),
-    );
+      );
+
+      if (!mounted) return;
+
+      await _checkReceiverStatus();
+    } catch (error, stackTrace) {
+      debugPrint('Could not show QR code: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      if (!mounted) return;
+
+      _message('Could not display the QR code.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
   }
 
   bool _isValidIpv4(String ip) {
@@ -372,6 +497,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
       _status = 'Stopping receiver...';
     });
 
+    _stopReceiverMonitor();
+
     try {
       await _service.stopReceiver();
 
@@ -389,7 +516,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
       });
 
       _message('Receiver stopped.');
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint('Could not stop receiver: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
       if (!mounted) return;
 
       _message('Could not stop receiver: $error');
@@ -403,7 +533,16 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _receiverStarted) {
+      _checkReceiverStatus();
+    }
+  }
+
+  @override
   void dispose() {
+    _stopReceiverMonitor();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
