@@ -449,8 +449,20 @@ class TransferService {
       request.headers.contentType = ContentType.binary;
       request.contentLength = fileSize;
 
-      await request.addStream(file.openRead());
+      var sentBytes = 0;
 
+final stream = file.openRead().map((chunk) {
+  sentBytes += chunk.length;
+
+  onProgress?.call(
+    sentBytes,
+    fileSize,
+  );
+
+  return chunk;
+});
+
+await request.addStream(stream).timeout(_transferTimeout);
       final response = await request
           .close()
           .timeout(_transferTimeout);
