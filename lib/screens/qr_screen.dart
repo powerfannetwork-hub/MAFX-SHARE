@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 class QrScreen extends StatefulWidget {
   final String ipAddress;
   final int port;
+  final int tcpPort;
   final String token;
   final String mode;
 
@@ -13,6 +14,7 @@ class QrScreen extends StatefulWidget {
     super.key,
     required this.ipAddress,
     required this.port,
+    required this.tcpPort,
     required this.token,
     this.mode = 'STANDARD',
   });
@@ -47,6 +49,7 @@ class _QrScreenState extends State<QrScreen> {
       'mode': _currentMode,
       'ip': widget.ipAddress,
       'port': widget.port,
+      'tcpPort': widget.tcpPort,
       'token': widget.token,
     });
   }
@@ -59,7 +62,8 @@ class _QrScreenState extends State<QrScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final modeColor = _highSpeedMode ? Colors.lightBlueAccent : _green;
+    final modeColor =
+        _highSpeedMode ? Colors.lightBlueAccent : _green;
 
     return Scaffold(
       backgroundColor: _background,
@@ -75,15 +79,12 @@ class _QrScreenState extends State<QrScreen> {
           child: Column(
             children: [
               const SizedBox(height: 12),
-
               const Icon(
                 Icons.devices_rounded,
                 size: 58,
                 color: _green,
               ),
-
               const SizedBox(height: 12),
-
               const Text(
                 'MAFX SHARE',
                 style: TextStyle(
@@ -93,9 +94,7 @@ class _QrScreenState extends State<QrScreen> {
                   letterSpacing: 1.2,
                 ),
               ),
-
               const SizedBox(height: 8),
-
               const Text(
                 'Connect both phones before transferring files.',
                 textAlign: TextAlign.center,
@@ -104,10 +103,8 @@ class _QrScreenState extends State<QrScreen> {
                   fontSize: 14,
                 ),
               ),
-
               const SizedBox(height: 24),
 
-              // High-speed mode control
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -137,12 +134,11 @@ class _QrScreenState extends State<QrScreen> {
                             size: 29,
                           ),
                         ),
-
                         const SizedBox(width: 12),
-
                         const Expanded(
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
                             children: [
                               Text(
                                 '5G+ High-Speed Mode',
@@ -163,17 +159,15 @@ class _QrScreenState extends State<QrScreen> {
                             ],
                           ),
                         ),
-
                         Switch.adaptive(
                           value: _highSpeedMode,
-                          activeTrackColor: Colors.lightBlueAccent,
+                          activeTrackColor:
+                              Colors.lightBlueAccent,
                           onChanged: _toggleHighSpeed,
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 10),
-
                     Text(
                       _highSpeedMode
                           ? 'High-speed mode selected. Scan the updated QR code with the sending phone.'
@@ -190,7 +184,6 @@ class _QrScreenState extends State<QrScreen> {
 
               const SizedBox(height: 24),
 
-              // QR code updates when the mode changes.
               Container(
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
@@ -238,9 +231,7 @@ class _QrScreenState extends State<QrScreen> {
                       color: modeColor,
                       size: 30,
                     ),
-
                     const SizedBox(height: 8),
-
                     Text(
                       _modeLabel,
                       textAlign: TextAlign.center,
@@ -250,9 +241,7 @@ class _QrScreenState extends State<QrScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-
                     const SizedBox(height: 10),
-
                     const Text(
                       'Receiver address',
                       style: TextStyle(
@@ -260,15 +249,30 @@ class _QrScreenState extends State<QrScreen> {
                         fontSize: 12,
                       ),
                     ),
-
                     const SizedBox(height: 5),
-
                     SelectableText(
                       '${widget.ipAddress}:${widget.port}',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'High-Speed TCP Port',
+                      style: TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      '${widget.tcpPort}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -289,7 +293,7 @@ class _QrScreenState extends State<QrScreen> {
                   SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Keep this screen open. On the other phone, open Send and scan this QR code. File selection should become available only after the connection succeeds.',
+                      'Keep this screen open. On the other phone, open Send and scan this QR code. Select the same transfer mode on both devices.',
                       style: TextStyle(
                         color: Colors.white60,
                         fontSize: 13,
