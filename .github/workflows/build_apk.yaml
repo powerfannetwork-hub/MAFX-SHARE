@@ -39,6 +39,8 @@ jobs:
 
       - name: Check project files
         run: |
+          set -euo pipefail
+
           test -f pubspec.yaml
           test -f lib/main.dart
           test -f android/app/src/main/AndroidManifest.xml
@@ -84,6 +86,67 @@ jobs:
 
           echo "Android V2 verification passed."
 
+      - name: Configure Android SDK versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle_file = Path("android/app/build.gradle.kts")
+          text = gradle_file.read_text()
+
+          replacements = [
+              (
+                  r'(?m)^(\s*)compileSdk\s*=\s*.*$',
+                  r'\g<1>compileSdk = 36',
+              ),
+              (
+                  r'(?m)^(\s*)ndkVersion\s*=\s*.*$',
+                  r'\g<1>ndkVersion = "27.0.12077973"',
+              ),
+              (
+                  r'(?m)^(\s*)minSdk\s*=\s*.*$',
+                  r'\g<1>minSdk = 23',
+              ),
+          ]
+
+          for pattern, replacement in replacements:
+              text, count = re.subn(
+                  pattern,
+                  replacement,
+                  text,
+                  count=1,
+              )
+
+              if count != 1:
+                  raise SystemExit(
+                      f"ERROR: Could not update Gradle setting: {pattern}"
+                  )
+
+          gradle_file.write_text(text)
+          print("Android SDK configuration updated.")
+          PY
+
+          echo "Checking Android SDK configuration..."
+
+          grep -nE \
+            'compileSdk = 36|ndkVersion = "27.0.12077973"|minSdk = 23' \
+            android/app/build.gradle.kts
+
+          grep -q 'compileSdk = 36' \
+            android/app/build.gradle.kts
+
+          grep -q 'ndkVersion = "27.0.12077973"' \
+            android/app/build.gradle.kts
+
+          grep -q 'minSdk = 23' \
+            android/app/build.gradle.kts
+
+          echo "Android SDK configuration verified."
+
       - name: Get dependencies
         run: flutter pub get
 
@@ -94,16 +157,22 @@ jobs:
         run: flutter build apk --release --target-platform android-arm64
 
       - name: Verify APK
+        shell: bash
         run: |
           set -euo pipefail
 
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
           ls -lh "$APK"
           sha256sum "$APK"
           unzip -t "$APK"
+
+          echo "APK verification passed."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
