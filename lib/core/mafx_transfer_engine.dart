@@ -587,9 +587,16 @@ class _IncomingFile {
     final future = merge();
     _mergeFuture = future;
 
-    return await future;
+    try {
+      return await future;
+    } catch (_) {
+      // Allow a later attempt if merging failed.
+      _mergeFuture = null;
+      rethrow;
+    }
   }
 
+  /// Merges all temporary chunk files in their original order.
   Future<File> merge() async {
     await _writeQueue;
 
@@ -604,6 +611,8 @@ class _IncomingFile {
     final output = File(outputPath);
     final sink = output.openWrite();
 
+    var sinkClosed = false;
+
     try {
       for (var index = 0; index < totalChunks; index++) {
         final path = _chunkPaths[index];
@@ -616,34 +625,39 @@ class _IncomingFile {
       }
 
       await sink.flush();
-    } catch (_) {
       await sink.close();
+      sinkClosed = true;
 
-      if (await output.exists()) {
-        await output.delete();
+      final mergedLength = await output.length();
+
+      if (mergedLength != fileSize) {
+        throw const FormatException(
+          'Merged file size does not match expected size.',
+        );
+      }
+
+      await cleanup();
+
+      return output;
+    } catch (_) {
+      if (!sinkClosed) {
+        try {
+          await sink.close();
+        } catch (_) {
+          // Continue cleanup even if closing the sink fails.
+        }
+      }
+
+      try {
+        if (await output.exists()) {
+          await output.delete();
+        }
+      } catch (_) {
+        // Best-effort cleanup of an incomplete output file.
       }
 
       rethrow;
-    } finally {
-      // The sink is closed in the catch block on failure.
-      // On success, close it here.
-      // File length is checked after closing.
     }
-
-    await sink.close();
-
-    final mergedLength = await output.length();
-
-    if (mergedLength != fileSize) {
-      await output.delete();
-
-      throw const FormatException(
-        'Merged file size does not match expected size.',
-      );
-    }
-
-    await cleanup();
-    return output;
   }
 
   Future<void> cleanup() async {
