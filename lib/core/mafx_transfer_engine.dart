@@ -35,17 +35,17 @@ class MafxTransferEngine {
   final int largeFileThreshold;
   final int veryLargeFileThreshold;
 
-  /// Selects a chunk size based on file size.
+  /// Selects chunk size based on file size.
   int chunkSizeFor(int fileSize) {
-  if (fileSize > veryLargeFileThreshold) {
-    return largeChunkSize; // 8 MB: files larger than 1 GB
-  }
+    if (fileSize > veryLargeFileThreshold) {
+      return largeChunkSize;
+    }
 
-  if (fileSize > largeFileThreshold) {
-    return mediumChunkSize; // 4 MB: files larger than 100 MB
-  }
+    if (fileSize > largeFileThreshold) {
+      return mediumChunkSize;
+    }
 
-  return smallChunkSize; // 1 MB: files up to 100 MB
+    return smallChunkSize;
   }
 
   /// Creates chunk descriptors without loading the whole file into memory.
@@ -101,8 +101,7 @@ class MafxTransferEngine {
         ? 'received_file'
         : file.uri.pathSegments.last;
 
-    final actualName =
-        _sanitizeName(fileName ?? defaultName);
+    final actualName = _sanitizeName(fileName ?? defaultName);
 
     if (actualName.isEmpty) {
       throw const FormatException('Invalid file name.');
@@ -442,6 +441,15 @@ class MafxReceiver {
         bytes: data,
       );
 
+      // If this was the final chunk, wait until merging succeeds
+      // before acknowledging the chunk to the sender.
+      final result = await incoming.mergeIfComplete();
+
+      if (result != null) {
+        _incoming.remove(fileId);
+        onFileReceived?.call(result);
+      }
+
       final ack = jsonEncode({
         'success': true,
         'fileId': fileId,
@@ -450,12 +458,6 @@ class MafxReceiver {
 
       socket.write('$ack\n');
       await socket.flush();
-
-      if (incoming.isComplete) {
-        final result = await incoming.merge();
-        _incoming.remove(fileId);
-        onFileReceived?.call(result);
-      }
     } catch (error) {
       final response = jsonEncode({
         'success': false,
@@ -520,6 +522,8 @@ class _IncomingFile {
 
   Future<void> _writeQueue = Future<void>.value();
 
+  Future<File>? _mergeFuture;
+
   bool get isComplete => _received.length == totalChunks;
 
   Future<void> writeChunk({
@@ -527,9 +531,7 @@ class _IncomingFile {
     required int offset,
     required List<int> bytes,
   }) async {
-    final completer = Completer<void>();
-
-    _writeQueue = _writeQueue.then((_) async {
+    final operation = _writeQueue.then((_) async {
       if (_received.contains(index)) {
         throw const FormatException('Duplicate chunk received.');
       }
@@ -547,23 +549,45 @@ class _IncomingFile {
           'mafx_${fileId}_$index.part';
 
       final chunkFile = File(path);
+
       await chunkFile.writeAsBytes(bytes, flush: true);
 
       _chunkPaths[index] = path;
       _received.add(index);
     });
 
-    _writeQueue.then((_) {
-      if (!completer.isCompleted) {
-        completer.complete();
-      }
-    }).catchError((Object error, StackTrace stackTrace) {
-      if (!completer.isCompleted) {
-        completer.completeError(error, stackTrace);
-      }
-    });
+    // Recover the queue if this operation fails, while preserving
+    // the original error for the caller awaiting "operation".
+    _writeQueue = operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
 
-    await completer.future;
+    await operation;
+  }
+
+  /// Merges once all chunks have arrived.
+  ///
+  /// Only the first caller receives the completed file.
+  /// Other concurrent callers wait for merging and receive null.
+  Future<File?> mergeIfComplete() async {
+    await _writeQueue;
+
+    if (!isComplete) {
+      return null;
+    }
+
+    final existing = _mergeFuture;
+
+    if (existing != null) {
+      await existing;
+      return null;
+    }
+
+    final future = merge();
+    _mergeFuture = future;
+
+    return await future;
   }
 
   Future<File> merge() async {
@@ -592,9 +616,21 @@ class _IncomingFile {
       }
 
       await sink.flush();
-    } finally {
+    } catch (_) {
       await sink.close();
+
+      if (await output.exists()) {
+        await output.delete();
+      }
+
+      rethrow;
+    } finally {
+      // The sink is closed in the catch block on failure.
+      // On success, close it here.
+      // File length is checked after closing.
     }
+
+    await sink.close();
 
     final mergedLength = await output.length();
 
@@ -614,6 +650,7 @@ class _IncomingFile {
     for (final path in _chunkPaths.values) {
       try {
         final file = File(path);
+
         if (await file.exists()) {
           await file.delete();
         }
@@ -630,7 +667,8 @@ class _IncomingFile {
 /// Maintains a single subscription to the TCP stream while reading
 /// exact byte counts or newline-delimited responses.
 class _SocketReader {
-  _SocketReader(Socket socket) : _iterator = StreamIterator<List<int>>(socket);
+  _SocketReader(Socket socket)
+      : _iterator = StreamIterator<List<int>>(socket);
 
   final StreamIterator<List<int>> _iterator;
 
@@ -690,6 +728,7 @@ class _SocketReader {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+
     await _iterator.cancel();
   }
 }
