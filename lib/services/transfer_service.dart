@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/mafx_transfer_engine.dart';
+
 class TransferService {
   TransferService._();
 
@@ -20,7 +22,8 @@ class TransferService {
   static const String highSpeedMode = '5G_PLUS';
 
   static const Duration _connectionTimeout = Duration(seconds: 5);
-  static const Duration _sendConnectionTimeout = Duration(seconds: 15);
+  static const Duration _sendConnectionTimeout =
+      Duration(seconds: 15);
   static const Duration _standardTransferTimeout =
       Duration(minutes: 10);
   static const Duration _highSpeedTransferTimeout =
@@ -29,11 +32,17 @@ class TransferService {
   static const int _standardChunkSize = 64 * 1024;
   static const int _highSpeedChunkSize = 1024 * 1024;
 
+  final MafxTransferEngine _engine = MafxTransferEngine(
+    parallelCount: 6,
+  );
+
   HttpServer? _server;
+  MafxReceiver? _tcpReceiver;
+
   String? _sessionToken;
   String? _activeMode;
-  Future<int>? _startingReceiver;
 
+  Future<int>? _startingReceiver;
   HttpClient? _sendClient;
 
   bool get isServerRunning => _server != null;
@@ -43,6 +52,11 @@ class TransferService {
   String? get activeMode => _activeMode;
 
   int? get port => _server?.port;
+
+  /// TCP port used by High-Speed Mode.
+  int? get tcpPort => _tcpReceiver?.port;
+
+  bool get isTcpReceiverRunning => _tcpReceiver != null;
 
   bool _isValidMode(String mode) {
     return mode == standardMode || mode == highSpeedMode;
@@ -109,23 +123,80 @@ class TransferService {
 
     final token = base64UrlEncode(tokenBytes).replaceAll('=', '');
 
-    final server = await HttpServer.bind(
-      InternetAddress.anyIPv4,
-      0,
-      shared: false,
-    );
+    HttpServer? server;
 
-    _sessionToken = token;
-    _activeMode = null;
-    _server = server;
+    try {
+      server = await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        0,
+        shared: false,
+      );
 
-    unawaited(_handleRequests(server));
+      final directory = await getApplicationDocumentsDirectory();
+      await directory.create(recursive: true);
 
-    debugPrint(
-      'MAFX SHARE receiver started on port ${server.port}',
-    );
+      final tcpReceiver = await _engine.startReceiver(
+        port: 0,
+        bindAddress: '0.0.0.0',
+        expectedToken: token,
+        outputDirectory: directory.path,
+        onFileReceived: (file) {
+          unawaited(_recordTcpReceivedFile(file));
+        },
+      );
 
-    return server.port;
+      _sessionToken = token;
+      _activeMode = null;
+      _server = server;
+      _tcpReceiver = tcpReceiver;
+
+      unawaited(_handleRequests(server));
+
+      debugPrint(
+        'MAFX SHARE HTTP receiver started on port ${server.port}',
+      );
+      debugPrint(
+        'MAFX SHARE TCP receiver started on port ${tcpReceiver.port}',
+      );
+
+      return server.port;
+    } catch (error, stackTrace) {
+      debugPrint('Unable to start receiver: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      try {
+        await server?.close(force: true);
+      } catch (_) {}
+
+      _sessionToken = null;
+      _activeMode = null;
+      _server = null;
+      _tcpReceiver = null;
+
+      rethrow;
+    }
+  }
+
+  Future<void> _recordTcpReceivedFile(File file) async {
+    try {
+      if (!await file.exists()) return;
+
+      final bytes = await file.length();
+      final fileName = getReceivedFileName(file);
+
+      await recordTransfer(
+        fileName: fileName,
+        direction: 'received',
+        bytes: bytes,
+      );
+
+      debugPrint(
+        'MAFX SHARE received $fileName ($bytes bytes, TCP)',
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Unable to record received TCP file: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   Future<void> _handleRequests(HttpServer server) async {
@@ -143,7 +214,7 @@ class TransferService {
         _activeMode = null;
       }
 
-      debugPrint('MAFX SHARE receiver stopped.');
+      debugPrint('MAFX SHARE HTTP receiver stopped.');
     }
   }
 
@@ -302,6 +373,7 @@ class TransferService {
           'app': 'MAFX_SHARE',
           'version': 1,
           'mode': requestedMode,
+          'tcpPort': _tcpReceiver?.port,
         },
       );
 
@@ -693,14 +765,21 @@ class TransferService {
 
   Future<void> stopReceiver() async {
     final server = _server;
+    final tcpReceiver = _tcpReceiver;
 
     _server = null;
+    _tcpReceiver = null;
     _sessionToken = null;
     _activeMode = null;
 
     if (server != null) {
       await server.close(force: true);
-      debugPrint('MAFX SHARE receiver closed.');
+      debugPrint('MAFX SHARE HTTP receiver closed.');
+    }
+
+    if (tcpReceiver != null) {
+      await tcpReceiver.close();
+      debugPrint('MAFX SHARE TCP receiver closed.');
     }
   }
 
@@ -740,6 +819,7 @@ class TransferService {
     required String filePath,
     required String fileName,
     String mode = standardMode,
+    int? tcpPort,
     void Function(int sentBytes, int totalBytes)? onProgress,
   }) async {
     if (token.isEmpty) {
@@ -773,8 +853,46 @@ class TransferService {
       throw Exception('Invalid receiver address.');
     }
 
-    final uri = baseUri.resolve('/upload');
     final fileSize = await file.length();
+
+    // Use parallel TCP only when a valid TCP port was provided.
+    if (mode == highSpeedMode && tcpPort != null) {
+      if (tcpPort < 1 || tcpPort > 65535) {
+        throw Exception('Invalid High-Speed TCP port.');
+      }
+
+      onProgress?.call(0, fileSize);
+
+      await _engine.sendFileParallel(
+        file,
+        baseUri.host,
+        port: tcpPort,
+        fileName: safeName,
+        token: token,
+        onProgress: onProgress,
+        connectTimeout: _sendConnectionTimeout,
+        transferTimeout: _highSpeedTransferTimeout,
+      );
+
+      await recordTransfer(
+        fileName: safeName,
+        direction: 'sent',
+        bytes: fileSize,
+      );
+
+      onProgress?.call(fileSize, fileSize);
+
+      debugPrint(
+        'MAFX SHARE sent $safeName '
+        '($fileSize bytes, parallel TCP)',
+      );
+
+      return true;
+    }
+
+    // Standard mode, or compatibility fallback when no TCP port
+    // has been supplied, continues to use HTTP streaming.
+    final uri = baseUri.resolve('/upload');
     final transferTimeout = _timeoutForMode(mode);
     final client = _getSendClient();
 
@@ -861,7 +979,7 @@ class TransferService {
 
       return true;
     } catch (_) {
-      // Discard a potentially unhealthy pooled connection after a failure.
+      // Discard a potentially unhealthy pooled connection.
       _sendClient?.close(force: true);
       _sendClient = null;
       rethrow;
