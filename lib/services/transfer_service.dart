@@ -14,24 +14,41 @@ class TransferService {
 
   static const String _historyKey = 'mafx_transfer_history';
   static const int _maxHistoryEntries = 100;
+  static const String _receivedPrefix = 'mafx_received_';
+
+  static const String standardMode = 'STANDARD';
+  static const String highSpeedMode = '5G_PLUS';
 
   static const Duration _connectionTimeout = Duration(seconds: 5);
   static const Duration _sendConnectionTimeout = Duration(seconds: 15);
-  static const Duration _transferTimeout = Duration(minutes: 10);
-
-  static const String _receivedPrefix = 'mafx_received_';
+  static const Duration _standardTransferTimeout =
+      Duration(minutes: 10);
+  static const Duration _highSpeedTransferTimeout =
+      Duration(minutes: 30);
 
   HttpServer? _server;
   String? _sessionToken;
+  String? _activeMode;
   Future<int>? _startingReceiver;
 
   bool get isServerRunning => _server != null;
 
   String? get sessionToken => _sessionToken;
 
+  String? get activeMode => _activeMode;
+
   int? get port => _server?.port;
 
-  /// Starts the receiver server.
+  bool _isValidMode(String mode) {
+    return mode == standardMode || mode == highSpeedMode;
+  }
+
+  Duration _timeoutForMode(String mode) {
+    return mode == highSpeedMode
+        ? _highSpeedTransferTimeout
+        : _standardTransferTimeout;
+  }
+
   Future<int> startReceiver() {
     final existingServer = _server;
 
@@ -72,6 +89,7 @@ class TransferService {
     );
 
     _sessionToken = token;
+    _activeMode = null;
     _server = server;
 
     unawaited(_handleRequests(server));
@@ -95,6 +113,7 @@ class TransferService {
       if (identical(_server, server)) {
         _server = null;
         _sessionToken = null;
+        _activeMode = null;
       }
 
       debugPrint('MAFX SHARE receiver stopped.');
@@ -178,7 +197,6 @@ class TransferService {
     );
   }
 
-  /// Authenticates a sender using the token embedded in the receiver QR.
   Future<void> _handleConnectionRequest(
     HttpRequest request,
   ) async {
@@ -233,8 +251,8 @@ class TransferService {
         return;
       }
 
-      if (requestedMode != 'STANDARD' &&
-          requestedMode != '5G_PLUS') {
+      if (requestedMode is! String ||
+          !_isValidMode(requestedMode)) {
         await _sendJson(
           request.response,
           HttpStatus.badRequest,
@@ -245,6 +263,8 @@ class TransferService {
         );
         return;
       }
+
+      _activeMode = requestedMode;
 
       await _sendJson(
         request.response,
@@ -259,8 +279,7 @@ class TransferService {
       );
 
       debugPrint(
-        'MAFX SHARE authenticated sender connection '
-        'using $requestedMode mode.',
+        'MAFX SHARE sender authenticated using $requestedMode.',
       );
     } on FormatException {
       await _sendJson(
@@ -286,6 +305,8 @@ class TransferService {
   Future<void> _receiveFile(HttpRequest request) async {
     final activeToken = _sessionToken;
     final suppliedToken = request.headers.value('x-mafx-token');
+    final suppliedMode = request.headers.value('x-mafx-mode');
+    final negotiatedMode = _activeMode;
 
     if (activeToken == null ||
         suppliedToken == null ||
@@ -296,6 +317,30 @@ class TransferService {
         {
           'success': false,
           'error': 'Invalid session token',
+        },
+      );
+      return;
+    }
+
+    if (negotiatedMode == null) {
+      await _sendJson(
+        request.response,
+        HttpStatus.forbidden,
+        {
+          'success': false,
+          'error': 'Connect to the receiver before sending files',
+        },
+      );
+      return;
+    }
+
+    if (suppliedMode != negotiatedMode) {
+      await _sendJson(
+        request.response,
+        HttpStatus.conflict,
+        {
+          'success': false,
+          'error': 'Transfer mode does not match the connection',
         },
       );
       return;
@@ -332,8 +377,8 @@ class TransferService {
     }
 
     final expectedLength = request.contentLength;
-
     final directory = await getApplicationDocumentsDirectory();
+
     await directory.create(recursive: true);
 
     final timestamp = DateTime.now().microsecondsSinceEpoch;
@@ -347,18 +392,21 @@ class TransferService {
     var completed = false;
 
     try {
-      final handle = await file.create(exclusive: true);
-      sink = handle.openWrite();
+      await file.create(exclusive: true);
+      sink = file.openWrite();
 
-      await sink.addStream(request).timeout(_transferTimeout);
+      await sink
+          .addStream(request)
+          .timeout(_timeoutForMode(negotiatedMode));
 
       await sink.flush();
       await sink.close();
       sink = null;
 
-      final bytes = await file.length();
+      final receivedBytes = await file.length();
 
-      if (expectedLength >= 0 && bytes != expectedLength) {
+      if (expectedLength >= 0 &&
+          receivedBytes != expectedLength) {
         throw const FormatException(
           'Received file size does not match the expected size.',
         );
@@ -367,7 +415,7 @@ class TransferService {
       await recordTransfer(
         fileName: fileName,
         direction: 'received',
-        bytes: bytes,
+        bytes: receivedBytes,
       );
 
       completed = true;
@@ -378,12 +426,14 @@ class TransferService {
         {
           'success': true,
           'fileName': fileName,
-          'bytes': bytes,
+          'bytes': receivedBytes,
+          'mode': negotiatedMode,
         },
       );
 
       debugPrint(
-        'MAFX SHARE received $fileName ($bytes bytes)',
+        'MAFX SHARE received $fileName '
+        '($receivedBytes bytes, $negotiatedMode)',
       );
     } catch (error, stackTrace) {
       debugPrint('Failed to receive $fileName: $error');
@@ -419,7 +469,6 @@ class TransferService {
     );
   }
 
-  /// Checks whether the receiver server is reachable.
   Future<bool> checkReceiver(String baseUrl) async {
     HttpClient? client;
 
@@ -466,19 +515,12 @@ class TransferService {
     }
   }
 
-  /// Authenticates the sender with the receiver before file selection.
-  ///
-  /// The receiver must support POST /connect and validate the QR token.
   Future<bool> connectToReceiver({
     required String receiverUrl,
     required String token,
     required String mode,
   }) async {
-    if (token.isEmpty) {
-      return false;
-    }
-
-    if (mode != 'STANDARD' && mode != '5G_PLUS') {
+    if (token.isEmpty || !_isValidMode(mode)) {
       return false;
     }
 
@@ -574,7 +616,6 @@ class TransferService {
     await prefs.setStringList(_historyKey, entries);
   }
 
-  /// Returns only files saved by MAFX SHARE's receiver.
   Future<List<File>> getReceivedFiles() async {
     final directory = await getApplicationDocumentsDirectory();
 
@@ -604,7 +645,6 @@ class TransferService {
     return name.startsWith(_receivedPrefix);
   }
 
-  /// Returns the original display name of a received file.
   String getReceivedFileName(File file) {
     final storedName = file.uri.pathSegments.isEmpty
         ? file.path.split(Platform.pathSeparator).last
@@ -629,6 +669,7 @@ class TransferService {
 
     _server = null;
     _sessionToken = null;
+    _activeMode = null;
 
     if (server != null) {
       await server.close(force: true);
@@ -645,8 +686,17 @@ class TransferService {
     required String token,
     required String filePath,
     required String fileName,
+    String mode = standardMode,
     void Function(int sentBytes, int totalBytes)? onProgress,
   }) async {
+    if (token.isEmpty) {
+      throw Exception('Connection token is missing.');
+    }
+
+    if (!_isValidMode(mode)) {
+      throw Exception('Unsupported transfer mode.');
+    }
+
     final file = File(filePath);
 
     if (!await file.exists()) {
@@ -672,9 +722,11 @@ class TransferService {
 
     final uri = baseUri.resolve('/upload');
     final fileSize = await file.length();
+    final transferTimeout = _timeoutForMode(mode);
 
     final client = HttpClient()
-      ..connectionTimeout = _sendConnectionTimeout;
+      ..connectionTimeout = _sendConnectionTimeout
+      ..maxConnectionsPerHost = 4;
 
     try {
       final request = await client
@@ -682,6 +734,7 @@ class TransferService {
           .timeout(_sendConnectionTimeout);
 
       request.headers.set('x-mafx-token', token);
+      request.headers.set('x-mafx-mode', mode);
       request.headers.set('x-file-name', safeName);
       request.headers.set(
         HttpHeaders.cacheControlHeader,
@@ -692,22 +745,26 @@ class TransferService {
 
       var sentBytes = 0;
 
+      onProgress?.call(0, fileSize);
+
       final stream = file.openRead().map((chunk) {
         sentBytes += chunk.length;
 
         onProgress?.call(
-          sentBytes,
+          sentBytes > fileSize ? fileSize : sentBytes,
           fileSize,
         );
 
         return chunk;
       });
 
-      await request.addStream(stream).timeout(_transferTimeout);
+      await request
+          .addStream(stream)
+          .timeout(transferTimeout);
 
       final response = await request
           .close()
-          .timeout(_transferTimeout);
+          .timeout(transferTimeout);
 
       final body = await response
           .transform(utf8.decoder)
@@ -728,9 +785,11 @@ class TransferService {
       }
 
       if (decoded['success'] != true ||
-          decoded['bytes'] != fileSize) {
+          decoded['bytes'] != fileSize ||
+          decoded['mode'] != mode) {
         throw Exception(
-          'Receiver did not confirm the complete file.',
+          'Receiver did not confirm the complete file '
+          'or the selected transfer mode.',
         );
       }
 
@@ -740,8 +799,11 @@ class TransferService {
         bytes: fileSize,
       );
 
+      onProgress?.call(fileSize, fileSize);
+
       debugPrint(
-        'MAFX SHARE sent $safeName ($fileSize bytes)',
+        'MAFX SHARE sent $safeName '
+        '($fileSize bytes, $mode)',
       );
 
       return true;
