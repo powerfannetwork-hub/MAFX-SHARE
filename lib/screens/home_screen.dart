@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'connect_screen.dart';
+import 'transfer_history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -72,6 +73,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openTransferHistory() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const TransferHistoryScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -97,9 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             tooltip: 'Transfer history',
-            onPressed: () => _showMessage(
-              'Transfer history will be available here.',
-            ),
+            onPressed: _openTransferHistory,
             icon: const Icon(Icons.history_rounded),
           ),
           IconButton(
@@ -383,7 +390,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: 'SEND',
               icon: Icons.send_rounded,
               onPressed: () {
-                final category = _categories[_selectedTab].category;
+                final category =
+                    _categories[_selectedTab].category;
                 _openSend(category: category);
               },
             ),
@@ -493,6 +501,20 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               ListTile(
                 leading: const Icon(
+                  Icons.history_rounded,
+                  color: Colors.white,
+                ),
+                title: const Text(
+                  'Transfer history',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _openTransferHistory();
+                },
+              ),
+              ListTile(
+                leading: const Icon(
                   Icons.info_outline_rounded,
                   color: Colors.white,
                 ),
@@ -531,7 +553,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 onTap: () {
                   Navigator.pop(context);
-                  _showMessage('Transfer history is not implemented yet.');
+                  _openTransferHistory();
                 },
               ),
               ListTile(
@@ -561,15 +583,6 @@ class _HomeScreenState extends State<HomeScreen> {
       applicationName: 'MAFX SHARE',
       applicationVersion: '1.0.0',
       applicationLegalese: 'Local file sharing application.',
-    );
-  }
-
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
     );
   }
 }
