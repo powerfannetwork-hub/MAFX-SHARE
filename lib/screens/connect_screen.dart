@@ -45,6 +45,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   String? _localIp;
 
   int? _localPort;
+  int? _peerTcpPort;
 
   Timer? _receiverMonitor;
 
@@ -55,7 +56,6 @@ class _ConnectScreenState extends State<ConnectScreen>
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addObserver(this);
 
     _status = _isSender
@@ -76,29 +76,26 @@ class _ConnectScreenState extends State<ConnectScreen>
 
   bool _isPrivateIpv4(String ip) {
     final parts = ip.split('.');
-
     if (parts.length != 4) return false;
 
     final octets = parts.map(int.tryParse).toList();
-
-    if (octets.any((value) => value == null)) {
-      return false;
-    }
+    if (octets.any((value) => value == null)) return false;
 
     final a = octets[0]!;
     final b = octets[1]!;
 
-    if (a == 10) return true;
+    return a == 10 ||
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 192 && b == 168);
+  }
 
-    if (a == 172 && b >= 16 && b <= 31) {
-      return true;
-    }
+  bool _isValidIpv4(String ip) {
+    final address = InternetAddress.tryParse(ip);
 
-    if (a == 192 && b == 168) {
-      return true;
-    }
-
-    return false;
+    return address != null &&
+        address.type == InternetAddressType.IPv4 &&
+        !address.isLoopback &&
+        !address.isMulticast;
   }
 
   Future<String?> _getLocalIp() async {
@@ -119,15 +116,11 @@ class _ConnectScreenState extends State<ConnectScreen>
 
           final ip = address.address;
 
-          if (ip.startsWith('169.254.')) {
-            continue;
-          }
+          if (ip.startsWith('169.254.')) continue;
 
           fallbackIp ??= ip;
 
-          if (_isPrivateIpv4(ip)) {
-            return ip;
-          }
+          if (_isPrivateIpv4(ip)) return ip;
         }
       }
 
@@ -141,7 +134,6 @@ class _ConnectScreenState extends State<ConnectScreen>
 
   void _startReceiverMonitor() {
     _receiverMonitor?.cancel();
-
     _receiverMonitor = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _checkReceiverStatus(),
@@ -175,6 +167,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _peerIp = null;
           _peerUrl = null;
           _peerToken = null;
+          _peerTcpPort = null;
           _status = 'Receiver stopped. Prepare it again.';
         });
 
@@ -183,7 +176,6 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
 
       final currentIp = await _getLocalIp();
-
       if (!mounted) return;
 
       if (currentIp == null) {
@@ -202,6 +194,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _peerIp = null;
           _peerUrl = null;
           _peerToken = null;
+          _peerTcpPort = null;
         });
       }
     } catch (error, stackTrace) {
@@ -223,28 +216,25 @@ class _ConnectScreenState extends State<ConnectScreen>
     try {
       final port = await _service.startReceiver();
       final ip = await _getLocalIp();
+      final token = _localToken;
+      final tcpPort = _service.tcpPort;
 
       if (!mounted) return;
 
-      final token = _localToken;
-
-      if (ip == null || token == null) {
+      if (ip == null || token == null || tcpPort == null) {
         await _service.stopReceiver();
-
         if (!mounted) return;
 
         setState(() {
           _receiverStarted = false;
           _localPort = null;
           _localIp = null;
-          _status = 'Network not ready. Check Wi-Fi.';
+          _status = 'Network or TCP receiver is not ready.';
         });
 
         _message(
-          'Connect this phone to Wi-Fi or a hotspot, '
-          'then prepare the receiver again.',
+          'Check Wi-Fi or hotspot, then prepare the receiver again.',
         );
-
         return;
       }
 
@@ -273,9 +263,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       _message('Receiver error: $error');
     } finally {
       if (mounted) {
-        setState(() {
-          _loading = false;
-        });
+        setState(() => _loading = false);
       }
     }
   }
@@ -283,9 +271,12 @@ class _ConnectScreenState extends State<ConnectScreen>
   Future<void> _showMyQr() async {
     if (_loading) return;
 
+    final tcpPort = _service.tcpPort;
+
     if (!_receiverStarted ||
         _localPort == null ||
         _localToken == null ||
+        tcpPort == null ||
         !_service.isServerRunning) {
       setState(() {
         _receiverStarted = false;
@@ -305,14 +296,10 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     try {
       final ip = await _getLocalIp();
-
       if (!mounted) return;
 
       if (ip == null) {
-        setState(() {
-          _status = 'Network unavailable. Check Wi-Fi.';
-        });
-
+        setState(() => _status = 'Network unavailable. Check Wi-Fi.');
         _message('Could not find the phone IP address.');
         return;
       }
@@ -328,6 +315,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           builder: (_) => QrScreen(
             ipAddress: ip,
             port: _localPort!,
+            tcpPort: tcpPort,
             token: _localToken!,
             mode: 'STANDARD',
           ),
@@ -335,31 +323,18 @@ class _ConnectScreenState extends State<ConnectScreen>
       );
 
       if (!mounted) return;
-
       await _checkReceiverStatus();
     } catch (error, stackTrace) {
       debugPrint('Could not show QR code: $error');
       debugPrintStack(stackTrace: stackTrace);
 
       if (!mounted) return;
-
       _message('Could not display the QR code.');
     } finally {
       if (mounted) {
-        setState(() {
-          _loading = false;
-        });
+        setState(() => _loading = false);
       }
     }
-  }
-
-  bool _isValidIpv4(String ip) {
-    final address = InternetAddress.tryParse(ip);
-
-    return address != null &&
-        address.type == InternetAddressType.IPv4 &&
-        !address.isLoopback &&
-        !address.isMulticast;
   }
 
   Future<void> _scanQr() async {
@@ -376,6 +351,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     final ipValue = result['ip'];
     final portValue = result['port'];
+    final tcpPortValue = result['tcpPort'];
     final tokenValue = result['token'];
     final modeValue = result['mode'];
 
@@ -386,10 +362,13 @@ class _ConnectScreenState extends State<ConnectScreen>
         portValue is! int ||
         portValue < 1 ||
         portValue > 65535 ||
+        tcpPortValue is! int ||
+        tcpPortValue < 1 ||
+        tcpPortValue > 65535 ||
         tokenValue is! String ||
         tokenValue.trim().isEmpty ||
         (modeValue != 'STANDARD' && modeValue != '5G_PLUS')) {
-      _message('Invalid MAFX SHARE QR code.');
+      _message('Invalid MAFX SHARE QR code. Update both phones first.');
       return;
     }
 
@@ -404,12 +383,12 @@ class _ConnectScreenState extends State<ConnectScreen>
       _peerIp = null;
       _peerUrl = null;
       _peerToken = null;
+      _peerTcpPort = null;
       _transferMode = 'STANDARD';
       _status = 'Authenticating connection to $ip...';
     });
 
     try {
-      // Authenticates the QR token before opening file selection.
       final connected = await _service.connectToReceiver(
         receiverUrl: peerUrl,
         token: token,
@@ -424,6 +403,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _peerIp = null;
           _peerUrl = null;
           _peerToken = null;
+          _peerTcpPort = null;
           _transferMode = 'STANDARD';
           _status = 'Connection authentication failed.';
         });
@@ -431,9 +411,8 @@ class _ConnectScreenState extends State<ConnectScreen>
         _message(
           'Could not authenticate the receiver. '
           'Make sure both phones are on the same Wi-Fi or hotspot '
-          'and that the receiver is running the updated app.',
+          'and the receiver is running.',
         );
-
         return;
       }
 
@@ -442,9 +421,10 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp = ip;
         _peerUrl = peerUrl;
         _peerToken = token;
+        _peerTcpPort = tcpPortValue;
         _transferMode = mode;
         _status = mode == '5G_PLUS'
-            ? 'Connected successfully. 5G+ High-Speed Mode selected.'
+            ? 'Connected. 5G+ High-Speed Mode selected.'
             : 'Connected successfully to $ip';
       });
 
@@ -454,7 +434,6 @@ class _ConnectScreenState extends State<ConnectScreen>
             : 'Connection authenticated successfully.',
       );
 
-      // The file picker opens only after successful authentication.
       await _chooseFiles();
     } catch (error, stackTrace) {
       debugPrint('Connection failed: $error');
@@ -467,6 +446,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
+        _peerTcpPort = null;
         _transferMode = 'STANDARD';
         _status = 'Connection failed.';
       });
@@ -474,9 +454,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       _message('Connection error. Please try again.');
     } finally {
       if (mounted) {
-        setState(() {
-          _loading = false;
-        });
+        setState(() => _loading = false);
       }
     }
   }
@@ -493,6 +471,7 @@ class _ConnectScreenState extends State<ConnectScreen>
     final receiverUrl = _peerUrl!;
     final receiverToken = _peerToken!;
     final transferMode = _transferMode;
+    final receiverTcpPort = _peerTcpPort;
 
     await Navigator.push<void>(
       context,
@@ -502,6 +481,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           receiverToken: receiverToken,
           category: widget.category,
           transferMode: transferMode,
+          receiverTcpPort: receiverTcpPort,
         ),
       ),
     );
@@ -519,7 +499,6 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     try {
       await _service.stopReceiver();
-
       if (!mounted) return;
 
       setState(() {
@@ -530,6 +509,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
+        _peerTcpPort = null;
         _transferMode = 'STANDARD';
         _status = 'Receiver stopped.';
       });
@@ -540,13 +520,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       debugPrintStack(stackTrace: stackTrace);
 
       if (!mounted) return;
-
       _message('Could not stop receiver.');
     } finally {
       if (mounted) {
-        setState(() {
-          _loading = false;
-        });
+        setState(() => _loading = false);
       }
     }
   }
@@ -580,9 +557,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           if (!_isSender)
             IconButton(
               tooltip: 'Show my QR',
-              onPressed: _receiverStarted && !_loading
-                  ? _showMyQr
-                  : null,
+              onPressed: _receiverStarted && !_loading ? _showMyQr : null,
               icon: const Icon(Icons.qr_code_2_rounded),
             ),
         ],
@@ -592,21 +567,14 @@ class _ConnectScreenState extends State<ConnectScreen>
           padding: const EdgeInsets.all(22),
           children: [
             const SizedBox(height: 24),
-
             Icon(
-              _isSender
-                  ? Icons.send_rounded
-                  : Icons.download_rounded,
+              _isSender ? Icons.send_rounded : Icons.download_rounded,
               size: 76,
               color: const Color(0xFF00D18B),
             ),
-
             const SizedBox(height: 20),
-
             Text(
-              _isSender
-                  ? 'Connect Before Sending'
-                  : 'Receive Files',
+              _isSender ? 'Connect Before Sending' : 'Receive Files',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
@@ -614,13 +582,11 @@ class _ConnectScreenState extends State<ConnectScreen>
                 fontWeight: FontWeight.bold,
               ),
             ),
-
             const SizedBox(height: 10),
-
             Text(
               _isSender
-                  ? 'Scan the receiver QR code. File selection will open after the connection is authenticated.'
-                  : 'Prepare this phone first, then show its QR code to the sending phone.',
+                  ? 'Scan the receiver QR code. File selection opens after authentication.'
+                  : 'Prepare this phone, then show its QR code to the sending phone.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white70,
@@ -628,140 +594,93 @@ class _ConnectScreenState extends State<ConnectScreen>
                 height: 1.5,
               ),
             ),
-
             const SizedBox(height: 32),
-
             if (!_isSender) ...[
               _ActionButton(
                 icon: Icons.wifi_rounded,
-                title: _receiverStarted
-                    ? 'Receiver Ready'
-                    : 'Prepare to Receive',
-                onPressed: _loading || _receiverStarted
-                    ? null
-                    : _prepareReceiver,
+                title: _receiverStarted ? 'Receiver Ready' : 'Prepare to Receive',
+                onPressed: _loading || _receiverStarted ? null : _prepareReceiver,
               ),
-
               const SizedBox(height: 14),
-
               _ActionButton(
                 icon: Icons.qr_code_2_rounded,
                 title: 'Show My QR Code',
-                onPressed: _loading || !_receiverStarted
-                    ? null
-                    : _showMyQr,
+                onPressed: _loading || !_receiverStarted ? null : _showMyQr,
               ),
-
               if (_localIp != null) ...[
                 const SizedBox(height: 12),
                 SelectableText(
                   'Local IP: $_localIp',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                  ),
+                  style: const TextStyle(color: Colors.white70),
                 ),
               ],
             ],
-
             if (_isSender) ...[
               _ActionButton(
                 icon: Icons.qr_code_scanner_rounded,
-                title: _loading
-                    ? 'Authenticating Connection...'
-                    : 'Scan Receiver QR Code',
+                title: _loading ? 'Authenticating Connection...' : 'Scan Receiver QR Code',
                 onPressed: _loading ? null : _scanQr,
               ),
-
               const SizedBox(height: 12),
-
               const Text(
-                'Both phones must be connected to the same Wi-Fi network or hotspot. File selection opens only after the receiver authenticates the QR token.',
+                'Both phones must be on the same Wi-Fi network or hotspot.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white60,
-                  height: 1.5,
-                ),
+                style: TextStyle(color: Colors.white60, height: 1.5),
               ),
             ],
-
             const SizedBox(height: 24),
-
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: _connected
-                      ? const Color(0xFF00D18B)
-                      : Colors.white12,
+                  color: _connected ? const Color(0xFF00D18B) : Colors.white12,
                 ),
               ),
               child: Column(
                 children: [
                   Icon(
-                    _connected
-                        ? Icons.check_circle_rounded
-                        : Icons.info_outline_rounded,
-                    color: _connected
-                        ? const Color(0xFF00D18B)
-                        : Colors.white70,
+                    _connected ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                    color: _connected ? const Color(0xFF00D18B) : Colors.white70,
                     size: 34,
                   ),
-
                   const SizedBox(height: 12),
-
                   Text(
                     _status,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 15),
                   ),
-
                   if (_connected) ...[
                     const SizedBox(height: 8),
                     Text(
                       'Transfer mode: $_transferMode',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                      ),
+                      style: const TextStyle(color: Colors.white70),
                     ),
                   ],
-
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
                     Text(
                       'Connected device: $_peerIp',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                      ),
+                      style: const TextStyle(color: Colors.white70),
                     ),
                   ],
-
                   if (_loading) ...[
                     const SizedBox(height: 16),
-                    const CircularProgressIndicator(
-                      color: Color(0xFF00D18B),
-                    ),
+                    const CircularProgressIndicator(color: Color(0xFF00D18B)),
                   ],
                 ],
               ),
             ),
-
             if (_receiverStarted) ...[
               const SizedBox(height: 14),
-
               TextButton.icon(
                 onPressed: _loading ? null : _stopReceiver,
                 icon: const Icon(Icons.stop_circle_outlined),
                 label: const Text('Stop Receiver'),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                ),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
               ),
             ],
           ],
@@ -792,10 +711,7 @@ class _ActionButton extends StatelessWidget {
         label: Text(
           title,
           textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF008D5A),
