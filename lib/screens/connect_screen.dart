@@ -7,12 +7,19 @@ import 'qr_screen.dart';
 import 'scan_qr_screen.dart';
 import 'send_screen.dart';
 
+enum TransferRole {
+  send,
+  receive,
+}
+
 class ConnectScreen extends StatefulWidget {
   final String? category;
+  final TransferRole role;
 
   const ConnectScreen({
     super.key,
     this.category,
+    this.role = TransferRole.receive,
   });
 
   @override
@@ -26,8 +33,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   bool _receiverStarted = false;
   bool _connected = false;
 
-  String _mode = 'STANDARD';
-  String _status = 'Start the receiver to begin connecting.';
+  String _status = 'Ready to connect';
 
   String? _peerIp;
   String? _peerUrl;
@@ -36,6 +42,30 @@ class _ConnectScreenState extends State<ConnectScreen> {
   int? _localPort;
 
   String? get _localToken => _service.sessionToken;
+
+  bool get _isSender => widget.role == TransferRole.send;
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (_isSender) {
+      _status = 'Scan the receiver QR code to connect.';
+    } else {
+      _status = 'Prepare this phone to receive files.';
+    }
+  }
+
+  void _message(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   Future<String?> _getLocalIp() async {
     try {
@@ -59,23 +89,12 @@ class _ConnectScreenState extends State<ConnectScreen> {
     return null;
   }
 
-  void _showMessage(String message) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Future<void> _startReceiver() async {
+  Future<void> _prepareReceiver() async {
     if (_loading || _receiverStarted) return;
 
     setState(() {
       _loading = true;
-      _status = 'Starting receiver...';
+      _status = 'Preparing receiver...';
     });
 
     try {
@@ -86,32 +105,31 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
       if (ip == null || _localToken == null) {
         setState(() {
-          _status =
-              'Could not find your local IP address or receiver token.';
+          _status = 'Network not ready. Check Wi-Fi.';
         });
 
-        _showMessage(
+        _message(
           'Connect this phone to Wi-Fi or a hotspot, then try again.',
         );
+
         return;
       }
 
       setState(() {
         _receiverStarted = true;
         _localPort = port;
-        _status =
-            'Receiver is ready. Now connect to the other phone.';
+        _status = 'Ready. Waiting for the other phone.';
       });
 
-      _showMessage('Receiver started successfully.');
+      _message('Receiver is ready.');
     } catch (error) {
       if (!mounted) return;
 
       setState(() {
-        _status = 'Could not start receiver.';
+        _status = 'Could not prepare receiver.';
       });
 
-      _showMessage('Unable to start receiver: $error');
+      _message('Receiver error: $error');
     } finally {
       if (mounted) {
         setState(() {
@@ -125,7 +143,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     if (!_receiverStarted ||
         _localPort == null ||
         _localToken == null) {
-      _showMessage('Start the receiver first.');
+      _message('Prepare the receiver first.');
       return;
     }
 
@@ -134,9 +152,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     if (!mounted) return;
 
     if (ip == null) {
-      _showMessage(
-        'Could not find the phone IP address. Check your network.',
-      );
+      _message('Could not find the phone IP address.');
       return;
     }
 
@@ -147,18 +163,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
           ipAddress: ip,
           port: _localPort!,
           token: _localToken!,
-          mode: _mode,
+          mode: 'STANDARD',
         ),
       ),
     );
   }
 
-  Future<void> _scanPeerQr() async {
-    if (!_receiverStarted) {
-      _showMessage('Start your receiver before scanning.');
-      return;
-    }
-
+  Future<void> _scanQr() async {
     if (_loading) return;
 
     final result = await Navigator.push<Map<String, dynamic>>(
@@ -170,14 +181,12 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (!mounted || result == null) return;
 
-    final app = result['app'];
-    final version = result['version'];
     final ip = result['ip'];
     final port = result['port'];
     final token = result['token'];
 
-    if (app != 'MAFX_SHARE' ||
-        version != 1 ||
+    if (result['app'] != 'MAFX_SHARE' ||
+        result['version'] != 1 ||
         ip is! String ||
         ip.trim().isEmpty ||
         port is! int ||
@@ -185,7 +194,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
         port > 65535 ||
         token is! String ||
         token.trim().isEmpty) {
-      _showMessage('The QR code is invalid.');
+      _message('Invalid MAFX SHARE QR code.');
       return;
     }
 
@@ -194,24 +203,25 @@ class _ConnectScreenState extends State<ConnectScreen> {
     setState(() {
       _loading = true;
       _connected = false;
-      _status = 'Checking the other phone...';
+      _status = 'Connecting to $ip...';
     });
 
     try {
-      final isReachable = await _service.checkReceiver(peerUrl);
+      final reachable = await _service.checkReceiver(peerUrl);
 
       if (!mounted) return;
 
-      if (!isReachable) {
+      if (!reachable) {
         setState(() {
-          _status = 'Connection failed. Try again.';
+          _status = 'Connection failed.';
         });
 
-        _showMessage(
-          'Cannot reach the other phone. Make sure both phones '
-          'are connected to the same Wi-Fi or hotspot and that '
-          'the other receiver is running.',
+        _message(
+          'Could not reach the other phone. '
+          'Make sure both phones use the same Wi-Fi or hotspot '
+          'and the receiving phone is ready.',
         );
+
         return;
       }
 
@@ -220,20 +230,23 @@ class _ConnectScreenState extends State<ConnectScreen> {
         _peerIp = ip;
         _peerUrl = peerUrl;
         _peerToken = token;
-        _status =
-            'Connection verified. You can now choose files to send.';
+        _status = 'Connected to $ip';
       });
 
-      _showMessage('Connection successful!');
+      _message('Connected successfully.');
+
+      if (_isSender) {
+        await _chooseFiles();
+      }
     } catch (error) {
       if (!mounted) return;
 
       setState(() {
         _connected = false;
-        _status = 'Unable to connect to the other phone.';
+        _status = 'Connection failed.';
       });
 
-      _showMessage('Connection error: $error');
+      _message('Connection error: $error');
     } finally {
       if (mounted) {
         setState(() {
@@ -245,7 +258,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   Future<void> _chooseFiles() async {
     if (!_connected || _peerUrl == null || _peerToken == null) {
-      _showMessage('Connect to the other phone first.');
+      _message('Connect to the other phone first.');
       return;
     }
 
@@ -261,7 +274,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     );
   }
 
-  Future<void> _stopConnection() async {
+  Future<void> _stopReceiver() async {
     if (_loading) return;
 
     await _service.stopReceiver();
@@ -277,244 +290,214 @@ class _ConnectScreenState extends State<ConnectScreen> {
       _peerToken = null;
       _status = 'Receiver stopped.';
     });
+  }
 
-    _showMessage('Receiver stopped.');
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    const green = Color(0xFF008D5A);
+    const dark = Color(0xFF202024);
+
     return Scaffold(
+      backgroundColor: dark,
       appBar: AppBar(
-        title: const Text('Connect Devices'),
+        backgroundColor: green,
+        foregroundColor: Colors.white,
+        title: Text(_isSender ? 'Send' : 'Receive'),
+        actions: [
+          IconButton(
+            tooltip: 'Show my QR',
+            onPressed: _receiverStarted ? _showMyQr : null,
+            icon: const Icon(Icons.qr_code_2_rounded),
+          ),
+        ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          const SizedBox(height: 12),
-          const Icon(
-            Icons.devices_rounded,
-            size: 82,
-            color: Color(0xFF00AEEF),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'MAFX SHARE',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 27,
-              fontWeight: FontWeight.bold,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(22),
+          children: [
+            const SizedBox(height: 24),
+            Icon(
+              _isSender
+                  ? Icons.send_rounded
+                  : Icons.download_rounded,
+              size: 76,
+              color: const Color(0xFF00D18B),
             ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Connect first. Choose files after connection.',
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 24),
+            const SizedBox(height: 20),
+            Text(
+              _isSender
+                  ? 'Send files quickly'
+                  : 'Receive files quickly',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 25,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _isSender
+                  ? 'Scan the QR code shown on the receiving phone.'
+                  : 'Prepare your phone and show your QR code.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 32),
 
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Connection mode',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: _mode,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'STANDARD',
-                        child: Text('Standard'),
-                      ),
-                      DropdownMenuItem(
-                        value: '5G_PLUS',
-                        child: Text('5G+'),
-                      ),
-                    ],
-                    onChanged: _loading || _receiverStarted
+            if (!_isSender) ...[
+              _ActionButton(
+                icon: Icons.wifi_rounded,
+                title: _receiverStarted
+                    ? 'Receiver Ready'
+                    : 'Prepare to Receive',
+                onPressed:
+                    _loading || _receiverStarted
                         ? null
-                        : (value) {
-                            if (value != null) {
-                              setState(() {
-                                _mode = value;
-                              });
-                            }
-                          },
-                  ),
-                ],
+                        : _prepareReceiver,
               ),
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Step 1: Start your receiver',
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Both phones must start their receivers. '
-                    'This allows each phone to send and receive files.',
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _loading || _receiverStarted
-                          ? null
-                          : _startReceiver,
-                      icon: const Icon(Icons.wifi_tethering),
-                      label: Text(
-                        _receiverStarted
-                            ? 'Receiver Started'
-                            : 'Start Receiver',
-                      ),
-                    ),
-                  ),
-                  if (_receiverStarted) ...[
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _loading ? null : _showMyQr,
-                        icon: const Icon(Icons.qr_code_2),
-                        label: const Text('Show My QR Code'),
-                      ),
-                    ),
-                  ],
-                ],
+              const SizedBox(height: 14),
+              _ActionButton(
+                icon: Icons.qr_code_2_rounded,
+                title: 'Show My QR Code',
+                onPressed:
+                    _receiverStarted ? _showMyQr : null,
               ),
-            ),
-          ),
+            ],
 
-          const SizedBox(height: 12),
-
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Step 2: Scan the other phone',
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'On both phones, scan the QR code displayed '
-                    'by the other phone. Each phone needs the '
-                    'other phone connection details.',
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _loading || !_receiverStarted
-                          ? null
-                          : _scanPeerQr,
-                      icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Scan Other Phone QR'),
-                    ),
-                  ),
-                ],
+            if (_isSender) ...[
+              _ActionButton(
+                icon: Icons.qr_code_scanner_rounded,
+                title: 'Scan QR Code',
+                onPressed: _loading ? null : _scanQr,
               ),
-            ),
-          ),
+              const SizedBox(height: 12),
+              const Text(
+                'The receiving phone must prepare its receiver '
+                'and display its QR code first.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white60,
+                  height: 1.5,
+                ),
+              ),
+            ],
 
-          const SizedBox(height: 12),
-
-          Card(
-            color: _connected
-                ? Colors.green.withValues(alpha: 0.08)
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: Colors.white12,
+                ),
+              ),
               child: Column(
                 children: [
                   Icon(
                     _connected
-                        ? Icons.check_circle
-                        : Icons.info_outline,
-                    size: 36,
+                        ? Icons.check_circle_rounded
+                        : Icons.info_outline_rounded,
                     color: _connected
-                        ? Colors.green
-                        : Colors.blueGrey,
+                        ? const Color(0xFF00D18B)
+                        : Colors.white70,
+                    size: 34,
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   Text(
                     _status,
                     textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                    ),
                   ),
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
-                    Text('Other phone: $_peerIp'),
+                    Text(
+                      'Device: $_peerIp',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                      ),
+                    ),
                   ],
                   if (_loading) ...[
-                    const SizedBox(height: 14),
-                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    const CircularProgressIndicator(
+                      color: Color(0xFF00D18B),
+                    ),
                   ],
                 ],
               ),
             ),
-          ),
 
-          const SizedBox(height: 16),
+            if (_connected && !_isSender) ...[
+              const SizedBox(height: 18),
+              _ActionButton(
+                icon: Icons.folder_open_rounded,
+                title: 'Choose Files to Send',
+                onPressed: _chooseFiles,
+              ),
+            ],
 
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: FilledButton.icon(
-              onPressed:
-                  _connected && !_loading ? _chooseFiles : null,
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Choose Files to Send'),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          if (_receiverStarted)
-            SizedBox(
-              width: double.infinity,
-              child: TextButton.icon(
-                onPressed: _loading ? null : _stopConnection,
+            if (_receiverStarted) ...[
+              const SizedBox(height: 14),
+              TextButton.icon(
+                onPressed: _loading ? null : _stopReceiver,
                 icon: const Icon(Icons.stop_circle_outlined),
                 label: const Text('Stop Receiver'),
               ),
-            ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: 12),
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final VoidCallback? onPressed;
 
-          const Text(
-            'Connect both phones to the same Wi-Fi or hotspot. '
-            'The 5G+ option is only a mode label and does not '
-            'increase network speed by itself.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12),
+  const _ActionButton({
+    required this.icon,
+    required this.title,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 58,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
           ),
-        ],
+        ),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF008D5A),
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: Colors.white12,
+          disabledForegroundColor: Colors.white38,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
       ),
     );
   }
