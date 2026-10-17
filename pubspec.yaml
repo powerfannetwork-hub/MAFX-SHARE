@@ -1,35 +1,46 @@
 name: mafx_share
-description: MAFX SHARE - Offline File Sharing
-publish_to: none
-version: 1.0.1+2
+description: "MAFX SHARE - Share files between devices."
+publish_to: 'none'
+
+version: 1.0.0+1
 
 environment:
-  sdk: '>=3.2.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-     photo_manager: ^3.7.1
-device_info_plus: ^11.3.0
+
   cupertino_icons: ^1.0.8
 
   # File selection
-  file_picker: ^8.1.7
+  file_picker: ^8.0.0
 
-  # QR code generation
+  # Browse photos, videos and media
+  photo_manager: ^3.7.1
+
+  # Device information
+  device_info_plus: ^11.3.0
+
+  # QR code support
   qr_flutter: ^4.1.0
-
-  # QR code scanning
   mobile_scanner: ^6.0.2
 
-  # Save transfer history and settings
-  shared_preferences: ^2.3.4
+  # Network requests
+  http: ^1.2.2
+
+  # Local storage
   path_provider: ^2.1.5
+  shared_preferences: ^2.3.3
+
+  # Permissions
+  permission_handler: ^11.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^5.0.0
+  flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
