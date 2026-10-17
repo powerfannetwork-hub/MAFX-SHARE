@@ -113,7 +113,7 @@ class _SendScreenState extends State<SendScreen> {
       debugPrint('Media selection failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      _showMessage('An kasa buɗe media browser: $error');
+      _showMessage('Unable to open media browser: $error');
     }
   }
 
@@ -152,13 +152,13 @@ class _SendScreenState extends State<SendScreen> {
       debugPrint('File selection failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      _showMessage('An kasa zaɓar fayiloli: $error');
+      _showMessage('Unable to select files: $error');
     }
   }
 
   void _addFiles(List<_SelectedFile> files) {
     if (files.isEmpty) {
-      _showMessage('Ba a sami fayilolin da za a iya amfani da su ba.');
+      _showMessage('No accessible files were found.');
       return;
     }
 
@@ -177,8 +177,8 @@ class _SendScreenState extends State<SendScreen> {
       }
 
       _status = added == 0
-          ? 'Babu sabon fayil da aka ƙara.'
-          : 'An ƙara fayiloli $added.';
+          ? 'No new files were added.'
+          : 'Added $added file(s).';
     });
   }
 
@@ -187,7 +187,7 @@ class _SendScreenState extends State<SendScreen> {
 
     setState(() {
       _selectedFiles.remove(file);
-      _status = 'An cire ${file.name}.';
+      _status = 'Removed ${file.name}.';
     });
   }
 
@@ -207,7 +207,7 @@ class _SendScreenState extends State<SendScreen> {
       _sentCount = 0;
       _totalBytes = 0;
 
-      _status = 'An share jerin fayilolin da aka zaɓa.';
+      _status = 'Selected files cleared.';
     });
   }
 
@@ -228,7 +228,7 @@ class _SendScreenState extends State<SendScreen> {
       _sentCount = 0;
       _totalBytes = 0;
 
-      _status = 'Ana shirya aika fayiloli...';
+      _status = 'Preparing files for transfer...';
       _failedFiles.clear();
     });
 
@@ -243,7 +243,7 @@ class _SendScreenState extends State<SendScreen> {
       final selected = filesToSend[index];
 
       setState(() {
-        _status = 'Ana aikawa: ${selected.name}';
+        _status = 'Sending: ${selected.name}';
         _currentFileName = selected.name;
 
         _progress = index / total;
@@ -257,7 +257,7 @@ class _SendScreenState extends State<SendScreen> {
         final file = File(selected.path);
 
         if (!await file.exists()) {
-          throw Exception('Ba a sami fayil ɗin a wayar ba.');
+          throw Exception('The selected file no longer exists.');
         }
 
         final fileSize = await file.length();
@@ -288,7 +288,7 @@ class _SendScreenState extends State<SendScreen> {
       } catch (error, stackTrace) {
         failed++;
 
-        _failedFiles.add(selected.name);
+        _failedFiles.add(selected);
 
         debugPrint('Failed to send ${selected.name}: $error');
         debugPrintStack(stackTrace: stackTrace);
@@ -301,8 +301,8 @@ class _SendScreenState extends State<SendScreen> {
         _progress = (index + 1) / total;
 
         _status = failed == 0
-            ? 'An aika $sent daga $total fayiloli...'
-            : 'An aika $sent; sun gaza $failed.';
+            ? 'Sent $sent of $total file(s)...'
+            : 'Sent $sent; failed $failed.';
       });
     }
 
@@ -317,20 +317,20 @@ class _SendScreenState extends State<SendScreen> {
       _currentFileTotalBytes = 0;
 
       if (_failedFiles.isEmpty) {
-        _status = 'An aika duk fayiloli cikin nasara!';
+        _status = 'All files were sent successfully!';
         _selectedFiles.clear();
       } else {
-        _status = 'An aika $sent daga $total. '
-            'Fayilolin da suka gaza: ${_failedFiles.length}.';
+        _status = 'Sent $sent of $total file(s). '
+            'Failed files: ${_failedFiles.length}.';
       }
     });
 
     if (_failedFiles.isEmpty) {
-      _showMessage('An aika duk fayiloli cikin nasara!');
+      _showMessage('All files were sent successfully!');
     } else {
       _showMessage(
-        'An aika $sent daga $total fayiloli. '
-        'Duba jerin fayilolin da suka gaza.',
+        'Sent $sent of $total file(s). '
+        'Review the failed files and retry.',
       );
     }
   }
@@ -525,7 +525,6 @@ class _SendScreenState extends State<SendScreen> {
             ],
           ),
 
-          // Overall progress for all selected files.
           if (_sending || _progress > 0) ...[
             const SizedBox(height: 14),
             LinearProgressIndicator(
@@ -545,11 +544,10 @@ class _SendScreenState extends State<SendScreen> {
             ),
           ],
 
-          // Progress for the individual file being sent.
           if (_sending) ...[
             const SizedBox(height: 14),
             Text(
-              'Fayil na yanzu: $_currentFileName',
+              'Current file: $_currentFileName',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -600,10 +598,10 @@ class _SendScreenState extends State<SendScreen> {
             ),
             const SizedBox(height: 5),
             ..._failedFiles.map(
-              (name) => Padding(
+              (file) => Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  '• $name',
+                  '• ${file.name}',
                   style: const TextStyle(
                     color: Colors.redAccent,
                     fontSize: 12,
@@ -630,18 +628,7 @@ class _SendScreenState extends State<SendScreen> {
   Future<void> _retryFailedFiles() async {
     if (_sending || _failedFiles.isEmpty) return;
 
-    final failedNames = List<String>.from(_failedFiles);
-
-    final failedItems = _selectedFiles
-        .where((file) => failedNames.contains(file.name))
-        .toList();
-
-    if (failedItems.isEmpty) {
-      _showMessage(
-        'Ba a sami fayilolin da suka gaza a jerin zaɓaɓɓun fayiloli ba.',
-      );
-      return;
-    }
+    final failedItems = List<_SelectedFile>.from(_failedFiles);
 
     setState(() {
       _selectedFiles
@@ -659,7 +646,7 @@ class _SendScreenState extends State<SendScreen> {
       _sentCount = 0;
       _totalBytes = 0;
 
-      _status = 'Ana sake aika fayilolin da suka gaza...';
+      _status = 'Retrying failed files...';
     });
 
     await _sendFiles();
