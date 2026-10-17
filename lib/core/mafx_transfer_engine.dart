@@ -37,15 +37,15 @@ class MafxTransferEngine {
 
   /// Selects a chunk size based on file size.
   int chunkSizeFor(int fileSize) {
-    if (fileSize < parallelThreshold) {
-      return smallChunkSize;
-    }
+  if (fileSize > veryLargeFileThreshold) {
+    return largeChunkSize; // 8 MB: files larger than 1 GB
+  }
 
-    if (fileSize > largeFileThreshold) {
-      return largeChunkSize;
-    }
+  if (fileSize > largeFileThreshold) {
+    return mediumChunkSize; // 4 MB: files larger than 100 MB
+  }
 
-    return mediumChunkSize;
+  return smallChunkSize; // 1 MB: files up to 100 MB
   }
 
   /// Creates chunk descriptors without loading the whole file into memory.
