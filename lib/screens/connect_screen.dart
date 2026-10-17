@@ -38,6 +38,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   String? _peerIp;
   String? _peerUrl;
   String? _peerToken;
+  String? _localIp;
 
   int? _localPort;
 
@@ -144,18 +145,23 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
       if (!mounted) return;
 
-      if (ip == null || _localToken == null) {
+      final token = _localToken;
+
+      if (ip == null || token == null) {
         await _service.stopReceiver();
+
+        if (!mounted) return;
 
         setState(() {
           _receiverStarted = false;
           _localPort = null;
+          _localIp = null;
           _status = 'Network not ready. Check Wi-Fi.';
         });
 
         _message(
           'Connect this phone to Wi-Fi or a hotspot, '
-          'then try again.',
+          'then prepare the receiver again.',
         );
 
         return;
@@ -164,7 +170,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
       setState(() {
         _receiverStarted = true;
         _localPort = port;
-        _status = 'Ready. Waiting for the other phone.';
+        _localIp = ip;
+        _status = 'Receiver ready. Waiting for the other phone.';
       });
 
       _message('Receiver is ready.');
@@ -177,6 +184,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
       setState(() {
         _receiverStarted = false;
         _localPort = null;
+        _localIp = null;
         _status = 'Could not prepare receiver.';
       });
 
@@ -198,6 +206,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
       return;
     }
 
+    // Refresh the IP in case the Wi-Fi network changed.
     final ip = await _getLocalIp();
 
     if (!mounted) return;
@@ -206,6 +215,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
       _message('Could not find the phone IP address.');
       return;
     }
+
+    setState(() {
+      _localIp = ip;
+    });
 
     await Navigator.push<void>(
       context,
@@ -220,6 +233,15 @@ class _ConnectScreenState extends State<ConnectScreen> {
     );
   }
 
+  bool _isValidIpv4(String ip) {
+    final address = InternetAddress.tryParse(ip);
+
+    return address != null &&
+        address.type == InternetAddressType.IPv4 &&
+        !address.isLoopback &&
+        !address.isMulticast;
+  }
+
   Future<void> _scanQr() async {
     if (_loading) return;
 
@@ -232,28 +254,35 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (!mounted || result == null) return;
 
-    final ip = result['ip'];
-    final port = result['port'];
-    final token = result['token'];
+    final ipValue = result['ip'];
+    final portValue = result['port'];
+    final tokenValue = result['token'];
+    final modeValue = result['mode'];
 
     if (result['app'] != 'MAFX_SHARE' ||
         result['version'] != 1 ||
-        ip is! String ||
-        ip.trim().isEmpty ||
-        port is! int ||
-        port < 1 ||
-        port > 65535 ||
-        token is! String ||
-        token.trim().isEmpty) {
+        ipValue is! String ||
+        !_isValidIpv4(ipValue.trim()) ||
+        portValue is! int ||
+        portValue < 1 ||
+        portValue > 65535 ||
+        tokenValue is! String ||
+        tokenValue.trim().isEmpty ||
+        (modeValue != 'STANDARD' && modeValue != '5G_PLUS')) {
       _message('Invalid MAFX SHARE QR code.');
       return;
     }
 
-    final peerUrl = 'http://$ip:$port';
+    final ip = ipValue.trim();
+    final token = tokenValue.trim();
+    final peerUrl = 'http://$ip:$portValue';
 
     setState(() {
       _loading = true;
       _connected = false;
+      _peerIp = null;
+      _peerUrl = null;
+      _peerToken = null;
       _status = 'Connecting to $ip...';
     });
 
@@ -273,8 +302,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
         _message(
           'Could not reach the other phone. '
-          'Check that both phones are on the same Wi-Fi '
-          'or hotspot and that the receiver is running.',
+          'Check that both phones are connected to the same '
+          'Wi-Fi or hotspot and that the receiver is running.',
         );
 
         return;
@@ -301,6 +330,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
       setState(() {
         _connected = false;
+        _peerIp = null;
+        _peerUrl = null;
+        _peerToken = null;
         _status = 'Connection failed.';
       });
 
@@ -349,11 +381,14 @@ class _ConnectScreenState extends State<ConnectScreen> {
         _receiverStarted = false;
         _connected = false;
         _localPort = null;
+        _localIp = null;
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
         _status = 'Receiver stopped.';
       });
+
+      _message('Receiver stopped.');
     } catch (error) {
       if (!mounted) return;
 
@@ -386,7 +421,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
         actions: [
           IconButton(
             tooltip: 'Show my QR',
-            onPressed: _receiverStarted ? _showMyQr : null,
+            onPressed: _receiverStarted && !_loading
+                ? _showMyQr
+                : null,
             icon: const Icon(Icons.qr_code_2_rounded),
           ),
         ],
@@ -427,6 +464,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
               ),
             ),
             const SizedBox(height: 32),
+
             if (!_isSender) ...[
               _ActionButton(
                 icon: Icons.wifi_rounded,
@@ -441,9 +479,22 @@ class _ConnectScreenState extends State<ConnectScreen> {
               _ActionButton(
                 icon: Icons.qr_code_2_rounded,
                 title: 'Show My QR Code',
-                onPressed: _receiverStarted ? _showMyQr : null,
+                onPressed: _loading || !_receiverStarted
+                    ? null
+                    : _showMyQr,
               ),
+              if (_localIp != null) ...[
+                const SizedBox(height: 12),
+                SelectableText(
+                  'Local IP: $_localIp',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
             ],
+
             if (_isSender) ...[
               _ActionButton(
                 icon: Icons.qr_code_scanner_rounded,
@@ -461,6 +512,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 ),
               ),
             ],
+
             const SizedBox(height: 24),
             Container(
               padding: const EdgeInsets.all(18),
@@ -507,14 +559,16 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 ],
               ),
             ),
+
             if (_connected && !_isSender) ...[
               const SizedBox(height: 18),
               _ActionButton(
                 icon: Icons.folder_open_rounded,
                 title: 'Choose Files to Send',
-                onPressed: _chooseFiles,
+                onPressed: _loading ? null : _chooseFiles,
               ),
             ],
+
             if (_receiverStarted) ...[
               const SizedBox(height: 14),
               TextButton.icon(
