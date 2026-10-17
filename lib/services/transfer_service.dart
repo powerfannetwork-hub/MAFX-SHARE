@@ -26,10 +26,15 @@ class TransferService {
   static const Duration _highSpeedTransferTimeout =
       Duration(minutes: 30);
 
+  static const int _standardChunkSize = 64 * 1024;
+  static const int _highSpeedChunkSize = 1024 * 1024;
+
   HttpServer? _server;
   String? _sessionToken;
   String? _activeMode;
   Future<int>? _startingReceiver;
+
+  HttpClient? _sendClient;
 
   bool get isServerRunning => _server != null;
 
@@ -47,6 +52,28 @@ class TransferService {
     return mode == highSpeedMode
         ? _highSpeedTransferTimeout
         : _standardTransferTimeout;
+  }
+
+  int _chunkSizeForMode(String mode) {
+    return mode == highSpeedMode
+        ? _highSpeedChunkSize
+        : _standardChunkSize;
+  }
+
+  HttpClient _getSendClient() {
+    final existing = _sendClient;
+
+    if (existing != null) {
+      return existing;
+    }
+
+    final client = HttpClient()
+      ..connectionTimeout = _sendConnectionTimeout
+      ..maxConnectionsPerHost = 4
+      ..idleTimeout = const Duration(seconds: 30);
+
+    _sendClient = client;
+    return client;
   }
 
   Future<int> startReceiver() {
@@ -679,6 +706,32 @@ class TransferService {
 
   Future<void> dispose() async {
     await stopReceiver();
+
+    _sendClient?.close(force: true);
+    _sendClient = null;
+  }
+
+  Stream<List<int>> _readFileChunks(
+    File file,
+    int chunkSize,
+  ) async* {
+    RandomAccessFile? handle;
+
+    try {
+      handle = await file.open(mode: FileMode.read);
+
+      while (true) {
+        final chunk = await handle.read(chunkSize);
+
+        if (chunk.isEmpty) {
+          break;
+        }
+
+        yield chunk;
+      }
+    } finally {
+      await handle?.close();
+    }
   }
 
   Future<bool> sendFile({
@@ -723,10 +776,7 @@ class TransferService {
     final uri = baseUri.resolve('/upload');
     final fileSize = await file.length();
     final transferTimeout = _timeoutForMode(mode);
-
-    final client = HttpClient()
-      ..connectionTimeout = _sendConnectionTimeout
-      ..maxConnectionsPerHost = 4;
+    final client = _getSendClient();
 
     try {
       final request = await client
@@ -747,7 +797,10 @@ class TransferService {
 
       onProgress?.call(0, fileSize);
 
-      final stream = file.openRead().map((chunk) {
+      final stream = _readFileChunks(
+        file,
+        _chunkSizeForMode(mode),
+      ).map((chunk) {
         sentBytes += chunk.length;
 
         onProgress?.call(
@@ -807,8 +860,11 @@ class TransferService {
       );
 
       return true;
-    } finally {
-      client.close(force: true);
+    } catch (_) {
+      // Discard a potentially unhealthy pooled connection after a failure.
+      _sendClient?.close(force: true);
+      _sendClient = null;
+      rethrow;
     }
   }
 }
