@@ -83,21 +83,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   String _displayName(File file) {
-    final storedName = file.uri.pathSegments.isNotEmpty
-        ? file.uri.pathSegments.last
-        : file.path;
-
-    final separator = storedName.indexOf('_');
-
-    if (separator > 0) {
-      final prefix = storedName.substring(0, separator);
-
-      if (int.tryParse(prefix) != null) {
-        return storedName.substring(separator + 1);
-      }
-    }
-
-    return storedName;
+  return _service.getReceivedFileName(file);
   }
 
   void _showMessage(String message) {
