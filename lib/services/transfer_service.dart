@@ -19,6 +19,8 @@ class TransferService {
   static const Duration _sendConnectionTimeout = Duration(seconds: 15);
   static const Duration _transferTimeout = Duration(minutes: 10);
 
+  static const String _receivedPrefix = 'mafx_received_';
+
   HttpServer? _server;
   String? _sessionToken;
 
@@ -32,8 +34,7 @@ class TransferService {
 
   /// Starts the receiver server.
   ///
-  /// If startup is already in progress, wait for that same operation.
-  /// If the server is already running, reuse its port.
+  /// Reuses an existing server or waits for an ongoing startup.
   Future<int> startReceiver() {
     final existingServer = _server;
 
@@ -76,8 +77,6 @@ class TransferService {
     _sessionToken = token;
     _server = server;
 
-    // Handle requests independently so a health check can respond
-    // while another request is transferring a file.
     unawaited(_handleRequests(server));
 
     debugPrint(
@@ -223,19 +222,22 @@ class TransferService {
     final expectedLength = request.contentLength;
 
     final directory = await getApplicationDocumentsDirectory();
-    final timestamp = DateTime.now().microsecondsSinceEpoch;
+    await directory.create(recursive: true);
 
-    // Use exclusive creation to avoid overwriting an existing file.
+    final timestamp = DateTime.now().microsecondsSinceEpoch;
+    final storedName = '$_receivedPrefix${timestamp}_$fileName';
+
     final file = File(
-      '${directory.path}${Platform.pathSeparator}'
-      '${timestamp}_$fileName',
+      '${directory.path}${Platform.pathSeparator}$storedName',
     );
 
     IOSink? sink;
     var completed = false;
 
     try {
-      sink = file.openWrite();
+      // Exclusive creation prevents overwriting an existing file.
+      final handle = await file.create(exclusive: true);
+      sink = handle.openWrite();
 
       await sink.addStream(request).timeout(_transferTimeout);
 
@@ -377,7 +379,7 @@ class TransferService {
     await prefs.setStringList(_historyKey, entries);
   }
 
-  /// Returns files saved by MAFX SHARE in its documents directory.
+  /// Returns only files saved by MAFX SHARE's receiver.
   Future<List<File>> getReceivedFiles() async {
     final directory = await getApplicationDocumentsDirectory();
 
@@ -388,7 +390,8 @@ class TransferService {
     final files = <File>[];
 
     await for (final entity in directory.list(followLinks: false)) {
-      if (entity is File) {
+      if (entity is File &&
+          _isManagedReceivedFile(entity.path)) {
         files.add(entity);
       }
     }
@@ -400,6 +403,31 @@ class TransferService {
     });
 
     return files;
+  }
+
+  bool _isManagedReceivedFile(String path) {
+    final name = path.split(Platform.pathSeparator).last;
+    return name.startsWith(_receivedPrefix);
+  }
+
+  /// Returns the original display name of a received file.
+  String getReceivedFileName(File file) {
+    final storedName = file.uri.pathSegments.isEmpty
+        ? file.path.split(Platform.pathSeparator).last
+        : Uri.decodeComponent(file.uri.pathSegments.last);
+
+    if (!storedName.startsWith(_receivedPrefix)) {
+      return storedName;
+    }
+
+    final remainder = storedName.substring(_receivedPrefix.length);
+    final separator = remainder.indexOf('_');
+
+    if (separator < 0 || separator == remainder.length - 1) {
+      return remainder;
+    }
+
+    return remainder.substring(separator + 1);
   }
 
   Future<void> stopReceiver() async {
