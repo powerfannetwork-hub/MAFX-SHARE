@@ -163,9 +163,7 @@ class _ConnectScreenState extends State<ConnectScreen>
     _checkingReceiver = true;
 
     try {
-      final serverRunning = _service.isServerRunning;
-
-      if (!serverRunning) {
+      if (!_service.isServerRunning) {
         if (!mounted) return;
 
         setState(() {
@@ -188,20 +186,17 @@ class _ConnectScreenState extends State<ConnectScreen>
       if (!mounted) return;
 
       if (currentIp == null) {
-        if (_status != 'Network unavailable. Check Wi-Fi.') {
-          setState(() {
-            _status = 'Network unavailable. Check Wi-Fi.';
-            _connected = false;
-          });
-        }
+        setState(() {
+          _status = 'Network unavailable. Check Wi-Fi.';
+          _connected = false;
+        });
         return;
       }
 
       if (currentIp != _localIp) {
         setState(() {
           _localIp = currentIp;
-          _status =
-              'Network changed. Show the updated QR code.';
+          _status = 'Network changed. Show the updated QR code.';
           _connected = false;
           _peerIp = null;
           _peerUrl = null;
@@ -260,7 +255,6 @@ class _ConnectScreenState extends State<ConnectScreen>
       });
 
       _startReceiverMonitor();
-
       _message('Receiver is ready.');
     } catch (error, stackTrace) {
       debugPrint('Receiver startup failed: $error');
@@ -368,7 +362,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   }
 
   Future<void> _scanQr() async {
-    if (_loading) return;
+    if (_loading || !_isSender) return;
 
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
@@ -408,10 +402,11 @@ class _ConnectScreenState extends State<ConnectScreen>
       _peerIp = null;
       _peerUrl = null;
       _peerToken = null;
-      _status = 'Connecting to $ip...';
+      _status = 'Verifying connection to $ip...';
     });
 
     try {
+      // Do not open file selection unless the receiver responds.
       final reachable = await _service.checkReceiver(peerUrl);
 
       if (!mounted) return;
@@ -434,19 +429,19 @@ class _ConnectScreenState extends State<ConnectScreen>
         return;
       }
 
+      // Save the connection only after the receiver check succeeds.
       setState(() {
         _connected = true;
         _peerIp = ip;
         _peerUrl = peerUrl;
         _peerToken = token;
-        _status = 'Connected to $ip';
+        _status = 'Connected successfully to $ip';
       });
 
-      _message('Connected successfully.');
+      _message('Connection verified successfully.');
 
-      if (_isSender) {
-        await _chooseFiles();
-      }
+      // Only the sending phone may open file selection.
+      await _chooseFiles();
     } catch (error, stackTrace) {
       debugPrint('Connection failed: $error');
       debugPrintStack(stackTrace: stackTrace);
@@ -461,7 +456,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _status = 'Connection failed.';
       });
 
-      _message('Connection error: $error');
+      _message('Connection error. Please try again.');
     } finally {
       if (mounted) {
         setState(() {
@@ -472,17 +467,23 @@ class _ConnectScreenState extends State<ConnectScreen>
   }
 
   Future<void> _chooseFiles() async {
-    if (!_connected || _peerUrl == null || _peerToken == null) {
-      _message('Connect to the other phone first.');
+    if (!_isSender ||
+        !_connected ||
+        _peerUrl == null ||
+        _peerToken == null) {
+      _message('Connect to the receiving phone first.');
       return;
     }
+
+    final receiverUrl = _peerUrl!;
+    final receiverToken = _peerToken!;
 
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         builder: (_) => SendScreen(
-          receiverUrl: _peerUrl!,
-          receiverToken: _peerToken!,
+          receiverUrl: receiverUrl,
+          receiverToken: receiverToken,
           category: widget.category,
         ),
       ),
@@ -522,7 +523,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       if (!mounted) return;
 
-      _message('Could not stop receiver: $error');
+      _message('Could not stop receiver.');
     } finally {
       if (mounted) {
         setState(() {
@@ -558,13 +559,14 @@ class _ConnectScreenState extends State<ConnectScreen>
         foregroundColor: Colors.white,
         title: Text(_isSender ? 'Send' : 'Receive'),
         actions: [
-          IconButton(
-            tooltip: 'Show my QR',
-            onPressed: _receiverStarted && !_loading
-                ? _showMyQr
-                : null,
-            icon: const Icon(Icons.qr_code_2_rounded),
-          ),
+          if (!_isSender)
+            IconButton(
+              tooltip: 'Show my QR',
+              onPressed: _receiverStarted && !_loading
+                  ? _showMyQr
+                  : null,
+              icon: const Icon(Icons.qr_code_2_rounded),
+            ),
         ],
       ),
       body: SafeArea(
@@ -572,6 +574,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           padding: const EdgeInsets.all(22),
           children: [
             const SizedBox(height: 24),
+
             Icon(
               _isSender
                   ? Icons.send_rounded
@@ -579,11 +582,13 @@ class _ConnectScreenState extends State<ConnectScreen>
               size: 76,
               color: const Color(0xFF00D18B),
             ),
+
             const SizedBox(height: 20),
+
             Text(
               _isSender
-                  ? 'Send files quickly'
-                  : 'Receive files quickly',
+                  ? 'Connect Before Sending'
+                  : 'Receive Files',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
@@ -591,17 +596,21 @@ class _ConnectScreenState extends State<ConnectScreen>
                 fontWeight: FontWeight.bold,
               ),
             ),
+
             const SizedBox(height: 10),
+
             Text(
               _isSender
-                  ? 'Scan the QR code shown on the receiving phone.'
-                  : 'Prepare this phone and show your QR code.',
+                  ? 'Scan the receiver QR code. File selection will open after the connection is verified.'
+                  : 'Prepare this phone first, then show its QR code to the sending phone.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white70,
                 fontSize: 15,
+                height: 1.5,
               ),
             ),
+
             const SizedBox(height: 32),
 
             if (!_isSender) ...[
@@ -614,7 +623,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                     ? null
                     : _prepareReceiver,
               ),
+
               const SizedBox(height: 14),
+
               _ActionButton(
                 icon: Icons.qr_code_2_rounded,
                 title: 'Show My QR Code',
@@ -622,6 +633,7 @@ class _ConnectScreenState extends State<ConnectScreen>
                     ? null
                     : _showMyQr,
               ),
+
               if (_localIp != null) ...[
                 const SizedBox(height: 12),
                 SelectableText(
@@ -637,13 +649,16 @@ class _ConnectScreenState extends State<ConnectScreen>
             if (_isSender) ...[
               _ActionButton(
                 icon: Icons.qr_code_scanner_rounded,
-                title: 'Scan QR Code',
+                title: _loading
+                    ? 'Verifying Connection...'
+                    : 'Scan Receiver QR Code',
                 onPressed: _loading ? null : _scanQr,
               ),
+
               const SizedBox(height: 12),
+
               const Text(
-                'The receiving phone must prepare its receiver '
-                'and display its QR code first.',
+                'Both phones must be connected to the same Wi-Fi network or hotspot. You can select files only after the receiver responds successfully.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white60,
@@ -653,12 +668,17 @@ class _ConnectScreenState extends State<ConnectScreen>
             ],
 
             const SizedBox(height: 24),
+
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(
+                  color: _connected
+                      ? const Color(0xFF00D18B)
+                      : Colors.white12,
+                ),
               ),
               child: Column(
                 children: [
@@ -671,7 +691,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                         : Colors.white70,
                     size: 34,
                   ),
+
                   const SizedBox(height: 12),
+
                   Text(
                     _status,
                     textAlign: TextAlign.center,
@@ -680,15 +702,17 @@ class _ConnectScreenState extends State<ConnectScreen>
                       fontSize: 15,
                     ),
                   ),
+
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'Device: $_peerIp',
+                      'Connected device: $_peerIp',
                       style: const TextStyle(
                         color: Colors.white70,
                       ),
                     ),
                   ],
+
                   if (_loading) ...[
                     const SizedBox(height: 16),
                     const CircularProgressIndicator(
@@ -699,21 +723,16 @@ class _ConnectScreenState extends State<ConnectScreen>
               ),
             ),
 
-            if (_connected && !_isSender) ...[
-              const SizedBox(height: 18),
-              _ActionButton(
-                icon: Icons.folder_open_rounded,
-                title: 'Choose Files to Send',
-                onPressed: _loading ? null : _chooseFiles,
-              ),
-            ],
-
             if (_receiverStarted) ...[
               const SizedBox(height: 14),
+
               TextButton.icon(
                 onPressed: _loading ? null : _stopReceiver,
                 icon: const Icon(Icons.stop_circle_outlined),
                 label: const Text('Stop Receiver'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                ),
               ),
             ],
           ],
@@ -740,9 +759,13 @@ class _ActionButton extends StatelessWidget {
       height: 58,
       child: FilledButton.icon(
         onPressed: onPressed,
-        icon: Icon(icon),
+        icon: Icon(
+          Icons.circle,
+          size: 0,
+        ),
         label: Text(
           title,
+          textAlign: TextAlign.center,
           style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
