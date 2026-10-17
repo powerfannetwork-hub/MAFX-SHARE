@@ -28,7 +28,7 @@ class _SendScreenState extends State<SendScreen> {
   final TransferService _transferService = TransferService.instance;
 
   final List<_SelectedFile> _selectedFiles = [];
-  final List<String> _failedFiles = [];
+  final List<_SelectedFile> _failedFiles = [];
 
   bool _sending = false;
 
