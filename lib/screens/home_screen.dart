@@ -112,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openTransferHistory() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const TransferHistoryScreen(),
+        builder: (_) => const HistoryScreen(),
       ),
     );
   }
