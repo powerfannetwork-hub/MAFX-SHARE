@@ -19,6 +19,7 @@ class _VideoLibraryScreenState extends State<VideoLibraryScreen> {
       TextEditingController();
 
   List<MediaFileModel> _videos = [];
+
   bool _isLoading = true;
   bool _hasPermission = true;
   String _searchQuery = '';
@@ -74,7 +75,9 @@ class _VideoLibraryScreenState extends State<VideoLibraryScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An samu matsala wajen loda bidiyoyi.'),
+          content: Text(
+            'An samu matsala wajen loda bidiyoyi.',
+          ),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -94,18 +97,46 @@ class _VideoLibraryScreenState extends State<VideoLibraryScreen> {
   }
 
   Future<void> _openVideo(MediaFileModel video) async {
+    if (video.path.trim().isEmpty) {
+      _showMessage('Ba a sami hanyar buɗe wannan bidiyon ba.');
+      return;
+    }
+
     await Navigator.of(context).push(
-      MaterialPageRoute(
+      MaterialPageRoute<void>(
         builder: (_) => PlayerScreen(
           videoPath: video.path,
           title: video.name,
         ),
       ),
     );
+  }
 
-    if (mounted) {
-      setState(() {});
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
     }
+
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
   Widget _buildSearchBox() {
@@ -131,6 +162,7 @@ class _VideoLibraryScreenState extends State<VideoLibraryScreen> {
               : IconButton(
                   onPressed: () {
                     _searchController.clear();
+
                     setState(() {
                       _searchQuery = '';
                     });
@@ -318,7 +350,7 @@ class _VideoLibraryScreenState extends State<VideoLibraryScreen> {
                 Expanded(
                   child: Text(
                     '${_videos.length} bidiyo'
-                    ' • ${MediaFileModel.formatBytes(totalSize)}',
+                    ' • ${_formatBytes(totalSize)}',
                     style: const TextStyle(
                       color: Colors.white60,
                       fontSize: 13,
