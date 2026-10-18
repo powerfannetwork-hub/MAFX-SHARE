@@ -1,5 +1,5 @@
 name: mafx_share
-description: "MAFX SHARE - Share files between devices."
+description: "MAFX SHARE - File sharing and media player."
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,14 +9,28 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
   cupertino_icons: ^1.0.8
+
+  # File selection and media library
   file_picker: ^8.0.0
   photo_manager: ^3.7.1
   open_filex: ^4.7.0
+  path_provider: ^2.1.5
+
+  # Network sharing and QR
   qr_flutter: ^4.1.0
   mobile_scanner: ^6.0.2
-  path_provider: ^2.1.5
   shared_preferences: ^2.3.3
+
+  # Video playback
+  video_player: ^2.9.2
+
+  # Music playback
+  just_audio: ^0.9.42
+
+  # Media thumbnails
+  video_thumbnail: ^0.5.3
 
 dev_dependencies:
   flutter_test:
