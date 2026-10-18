@@ -333,10 +333,12 @@ class TransferService {
           'message': 'Receiver will stop.',
         });
 
-        unawaited(Future<void>.delayed(
-          const Duration(milliseconds: 150),
-          stopReceiver,
-        ));
+        unawaited(
+          Future<void>.delayed(
+            const Duration(milliseconds: 150),
+            stopReceiver,
+          ),
+        );
         return;
       }
 
@@ -369,10 +371,10 @@ class TransferService {
   }
 
   Future<void> _handleUpload(HttpRequest request) async {
-    final token = request.headers.value('authorization');
-    final suppliedToken = token?.startsWith('Bearer ')
-        == true
-        ? token!.substring(7)
+    final authorization = request.headers.value('authorization');
+
+    final suppliedToken = authorization?.startsWith('Bearer ') == true
+        ? authorization!.substring(7)
         : request.uri.queryParameters['token'];
 
     if (!_isValidToken(suppliedToken)) {
@@ -384,11 +386,14 @@ class TransferService {
       return;
     }
 
-    final fileName = _sanitizeFileName(
-      request.headers.value('x-file-name') ??
-          request.uri.queryParameters['name'] ??
-          'received_file',
-    );
+    // The sender sends the original file name in the header.
+    // Decode it only if it was URL-encoded by an older sender.
+    final rawFileName =
+        request.headers.value('x-file-name') ??
+        request.uri.queryParameters['name'] ??
+        'received_file';
+
+    final fileName = _sanitizeFileName(rawFileName);
 
     if (fileName.isEmpty) {
       await _writeError(
@@ -488,10 +493,12 @@ class TransferService {
     String message,
   ) async {
     response.statusCode = statusCode;
-    response.write(jsonEncode({
-      'success': false,
-      'error': message,
-    }));
+    response.write(
+      jsonEncode({
+        'success': false,
+        'error': message,
+      }),
+    );
     await response.close();
   }
 
@@ -587,33 +594,34 @@ class TransferService {
 
     final client = _getSendClient();
     final size = await file.length();
+
     final name = _sanitizeFileName(
       fileName ?? getReceivedFileName(file),
     );
 
     final request = await client
         .post(
-          InternetAddress.tryParse(receiverIp) != null
-              ? Uri(
-                  scheme: 'http',
-                  host: receiverIp,
-                  port: receiverPort,
-                  path: '/upload',
-                )
-              : Uri(
-                  scheme: 'http',
-                  host: receiverIp,
-                  port: receiverPort,
-                  path: '/upload',
-                ),
+          Uri(
+            scheme: 'http',
+            host: receiverIp,
+            port: receiverPort,
+            path: '/upload',
+          ),
         )
         .timeout(_connectionTimeout);
 
     request.headers
-      ..set(HttpHeaders.contentTypeHeader, 'application/octet-stream')
+      ..set(
+        HttpHeaders.contentTypeHeader,
+        'application/octet-stream',
+      )
       ..set(HttpHeaders.contentLengthHeader, size)
-      ..set(HttpHeaders.authorizationHeader, 'Bearer $token')
-      ..set('x-file-name', Uri.encodeComponent(name));
+      ..set(
+        HttpHeaders.authorizationHeader,
+        'Bearer $token',
+      )
+      // Send the original file name, not a URL-encoded version.
+      ..set('x-file-name', name);
 
     var sentBytes = 0;
 
@@ -649,7 +657,9 @@ class TransferService {
 
     if (decoded is! Map<String, dynamic> ||
         decoded['success'] != true) {
-      throw const FormatException('Receiver rejected the file.');
+      throw const FormatException(
+        'Receiver rejected the file.',
+      );
     }
 
     await recordTransfer(
@@ -707,7 +717,8 @@ class TransferService {
   }) async {
     try {
       final preferences = await SharedPreferences.getInstance();
-      final existing = preferences.getStringList(_historyKey) ?? [];
+      final existing =
+          preferences.getStringList(_historyKey) ?? [];
 
       final entry = <String, dynamic>{
         'fileName': fileName,
@@ -771,8 +782,7 @@ class TransferService {
           ? ''
           : entity.uri.pathSegments.last;
 
-      if (name.startsWith(_receivedPrefix) ||
-          name.startsWith('mafx_received_')) {
+      if (name.startsWith(_receivedPrefix)) {
         files.add(entity);
       }
     }
@@ -793,17 +803,6 @@ class TransferService {
 
     if (name.startsWith(_receivedPrefix)) {
       final withoutPrefix = name.substring(_receivedPrefix.length);
-      final separator = withoutPrefix.indexOf('_');
-
-      if (separator >= 0 && separator + 1 < withoutPrefix.length) {
-        return withoutPrefix.substring(separator + 1);
-      }
-
-      return withoutPrefix;
-    }
-
-    if (name.startsWith('mafx_received_')) {
-      final withoutPrefix = name.substring('mafx_received_'.length);
       final separator = withoutPrefix.indexOf('_');
 
       if (separator >= 0 && separator + 1 < withoutPrefix.length) {
