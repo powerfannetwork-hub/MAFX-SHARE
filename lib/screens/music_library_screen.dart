@@ -25,7 +25,6 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   bool _isLoading = true;
   bool _hasPermission = true;
   bool _isChangingSong = false;
-
   String _searchQuery = '';
 
   static const Color _backgroundColor = Color(0xFF101010);
@@ -39,25 +38,24 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   }
 
   Future<void> _loadSongs() async {
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+    });
 
     try {
       final hasPermission =
           await _mediaService.requestPermission();
 
-      if (!hasPermission) {
-        if (!mounted) return;
+      if (!mounted) return;
 
+      if (!hasPermission) {
         setState(() {
           _hasPermission = false;
           _songs = [];
           _isLoading = false;
         });
-
         return;
       }
 
@@ -71,6 +69,16 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
         _songs = songs;
         _hasPermission = true;
         _isLoading = false;
+
+        if (_currentIndex != null) {
+          final currentPath = _currentIndex! < _songs.length
+              ? _songs[_currentIndex!].path
+              : null;
+
+          if (currentPath == null) {
+            _currentIndex = null;
+          }
+        }
       });
     } catch (_) {
       if (!mounted) return;
@@ -81,7 +89,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An samu matsala wajen loda kiɗa.'),
+          content: Text('Unable to load music. Please try again.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -108,11 +116,13 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   }
 
   Future<void> _playSong(MediaFileModel song) async {
+    if (_isChangingSong) return;
+
     final index = _songs.indexWhere(
       (item) => item.path == song.path,
     );
 
-    if (index < 0 || _isChangingSong) return;
+    if (index < 0) return;
 
     setState(() {
       _isChangingSong = true;
@@ -121,18 +131,19 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
 
     try {
       await _audioPlayer.setFilePath(song.path);
+
+      if (!mounted) return;
+
       await _audioPlayer.play();
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'An kasa kunna kiɗan: ${song.name}',
-            ),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to play "${song.name}".'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -143,6 +154,8 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   }
 
   Future<void> _togglePlayPause() async {
+    if (_isChangingSong) return;
+
     if (_currentIndex == null || _songs.isEmpty) {
       if (_filteredSongs.isNotEmpty) {
         await _playSong(_filteredSongs.first);
@@ -150,10 +163,21 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
       return;
     }
 
-    if (_audioPlayer.playing) {
-      await _audioPlayer.pause();
-    } else {
-      await _audioPlayer.play();
+    try {
+      if (_audioPlayer.playing) {
+        await _audioPlayer.pause();
+      } else {
+        await _audioPlayer.play();
+      }
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to control audio playback.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
 
     if (mounted) {
@@ -162,34 +186,36 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   }
 
   Future<void> _playNext() async {
-    if (_songs.isEmpty) return;
+    if (_songs.isEmpty || _isChangingSong) return;
 
     final current = _currentIndex ?? -1;
     final next = current + 1;
 
-    if (next < _songs.length) {
-      await _playSong(_songs[next]);
-    } else {
-      await _playSong(_songs.first);
-    }
+    await _playSong(
+      next < _songs.length ? _songs[next] : _songs.first,
+    );
   }
 
   Future<void> _playPrevious() async {
-    if (_songs.isEmpty) return;
+    if (_songs.isEmpty || _isChangingSong) return;
 
     final current = _currentIndex ?? 0;
     final previous = current - 1;
 
-    if (previous >= 0) {
-      await _playSong(_songs[previous]);
-    } else {
-      await _playSong(_songs.last);
-    }
+    await _playSong(
+      previous >= 0 ? _songs[previous] : _songs.last,
+    );
   }
 
   String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes;
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
     final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '$hours:${minutes.toString().padLeft(2, '0')}:'
+          '${seconds.toString().padLeft(2, '0')}';
+    }
 
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
@@ -221,7 +247,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
         },
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
-          hintText: 'Bincika kiɗa...',
+          hintText: 'Search music...',
           hintStyle: const TextStyle(color: Colors.white54),
           prefixIcon: const Icon(
             Icons.search,
@@ -241,6 +267,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
                     Icons.close,
                     color: Colors.white70,
                   ),
+                  tooltip: 'Clear search',
                 ),
           filled: true,
           fillColor: _cardColor,
@@ -267,7 +294,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
             ),
             const SizedBox(height: 16),
             const Text(
-              'Ana buƙatar izini',
+              'Permission Required',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 19,
@@ -276,8 +303,8 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Ka ba MAFX SHARE izinin shiga media library '
-              'domin ya nuna kiɗan wayarka.',
+              'Allow MAFX SHARE to access your media library '
+              'to display music stored on your device.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white60,
@@ -291,12 +318,26 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
                 backgroundColor: _greenColor,
                 foregroundColor: Colors.black,
               ),
-              child: const Text('Sake neman izini'),
+              child: const Text('Grant Permission'),
             ),
             TextButton(
-              onPressed: _mediaService.openPermissionSettings,
+              onPressed: () async {
+                try {
+                  await _mediaService.openPermissionSettings();
+                } catch (_) {
+                  if (!mounted) return;
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Unable to open permission settings.',
+                      ),
+                    ),
+                  );
+                }
+              },
               child: const Text(
-                'Buɗe saitunan izini',
+                'Open Permission Settings',
                 style: TextStyle(color: Colors.white70),
               ),
             ),
@@ -307,7 +348,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
   }
 
   Widget _buildEmptyState() {
-    final searching = _searchQuery.isNotEmpty;
+    final searching = _searchQuery.trim().isNotEmpty;
 
     return Center(
       child: Padding(
@@ -324,7 +365,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              searching ? 'Ba a sami kiɗan ba' : 'Babu kiɗa',
+              searching ? 'No Music Found' : 'No Music Available',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 19,
@@ -334,9 +375,9 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
             const SizedBox(height: 8),
             Text(
               searching
-                  ? 'Gwada wani suna daban.'
-                  : 'Kiɗan da ke cikin media library na wayarka '
-                      'za su bayyana a nan.',
+                  ? 'Try searching with a different name.'
+                  : 'Music available in your device media library '
+                      'will appear here.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white60,
@@ -348,7 +389,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
               OutlinedButton.icon(
                 onPressed: _loadSongs,
                 icon: const Icon(Icons.refresh),
-                label: const Text('Sake loda'),
+                label: const Text('Refresh Library'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _greenColor,
                 ),
@@ -444,7 +485,8 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
               final maxMs = duration.inMilliseconds;
               final positionMs = position.inMilliseconds;
 
-              final sliderMax = maxMs > 0 ? maxMs.toDouble() : 1.0;
+              final sliderMax =
+                  maxMs > 0 ? maxMs.toDouble() : 1.0;
 
               final sliderValue = positionMs
                   .clamp(0, maxMs > 0 ? maxMs : 1)
@@ -501,10 +543,10 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               IconButton(
-                onPressed: _playPrevious,
+                onPressed: _isChangingSong ? null : _playPrevious,
                 iconSize: 30,
                 color: Colors.white,
-                tooltip: 'Kiɗa na baya',
+                tooltip: 'Previous track',
                 icon: const Icon(Icons.skip_previous_rounded),
               ),
               const SizedBox(width: 18),
@@ -523,7 +565,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
                     onPressed: loading ? null : _togglePlayPause,
                     iconSize: 54,
                     color: _greenColor,
-                    tooltip: playing ? 'Dakatar' : 'Kunna',
+                    tooltip: playing ? 'Pause' : 'Play',
                     icon: loading
                         ? const SizedBox(
                             width: 30,
@@ -543,10 +585,10 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
               ),
               const SizedBox(width: 18),
               IconButton(
-                onPressed: _playNext,
+                onPressed: _isChangingSong ? null : _playNext,
                 iconSize: 30,
                 color: Colors.white,
-                tooltip: 'Kiɗa na gaba',
+                tooltip: 'Next track',
                 icon: const Icon(Icons.skip_next_rounded),
               ),
             ],
@@ -577,7 +619,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
         actions: [
           IconButton(
             onPressed: _loadSongs,
-            tooltip: 'Sake loda kiɗa',
+            tooltip: 'Refresh music library',
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -597,7 +639,7 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${_songs.length} waƙa • '
+                    '${_songs.length} tracks • '
                     '${_formatTotalSize(totalSize)}',
                     style: const TextStyle(
                       color: Colors.white60,
@@ -651,7 +693,9 @@ class _MusicLibraryScreenState extends State<MusicLibraryScreen> {
                             ),
                           ),
           ),
-          if (!_isLoading && _hasPermission && _songs.isNotEmpty)
+          if (!_isLoading &&
+              _hasPermission &&
+              _songs.isNotEmpty)
             _buildNowPlaying(),
         ],
       ),
