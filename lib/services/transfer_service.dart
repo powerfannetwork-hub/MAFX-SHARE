@@ -40,6 +40,7 @@ class TransferService {
   String? _activeMode;
 
   Future<int>? _startingReceiver;
+  Future<void>? _stoppingReceiver;
   HttpClient? _sendClient;
 
   bool get isServerRunning => _server != null;
@@ -86,11 +87,55 @@ class TransferService {
     return client;
   }
 
+  Uri _endpoint(Uri baseUri, String path) {
+    return baseUri.replace(
+      path: path,
+      query: null,
+      fragment: null,
+    );
+  }
+
+  Future<HttpClientResponse> _postJson({
+    required HttpClient client,
+    required Uri uri,
+    required Map<String, dynamic> body,
+    Duration? timeout,
+  }) async {
+    final request = await client
+        .openUrl('POST', uri)
+        .timeout(timeout ?? _connectionTimeout);
+
+    request.headers
+      ..set(HttpHeaders.contentTypeHeader, 'application/json')
+      ..set(HttpHeaders.acceptHeader, 'application/json');
+
+    request.write(jsonEncode(body));
+
+    return request.close().timeout(
+          timeout ?? _connectionTimeout,
+        );
+  }
+
+  Future<Map<String, dynamic>> _readResponseJson(
+    HttpClientResponse response,
+  ) async {
+    final text = await utf8.decoder
+        .bind(response)
+        .join()
+        .timeout(_connectionTimeout);
+
+    final decoded = jsonDecode(text);
+
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException(
+        'Receiver returned an invalid JSON object.',
+      );
+    }
+
+    return decoded;
+  }
+
   /// Authenticates with a receiver before allowing file transfers.
-  ///
-  /// The receiver must provide its HTTP URL and current session token.
-  /// The selected mode is validated by the receiver before the connection
-  /// is considered successful.
   Future<bool> connectToReceiver({
     required String receiverUrl,
     required String token,
@@ -104,90 +149,58 @@ class TransferService {
 
     try {
       uri = Uri.parse(receiverUrl);
-    } catch (_) {
+    } on FormatException {
       return false;
     }
 
     if (uri.scheme != 'http' ||
         uri.host.isEmpty ||
         uri.port < 1 ||
-        uri.port > 65535) {
+        uri.port > 65535 ||
+        uri.userInfo.isNotEmpty) {
       return false;
     }
 
     final client = _getSendClient();
 
     try {
-      final verifyRequest = await client
-    .openUrl(
-      'POST',
-      uri.replace(path: '/verify', query: null, fragment: null),
-    )
-    .timeout(_connectionTimeout);
-
-      verifyRequest.headers
-        ..set(HttpHeaders.contentTypeHeader, 'application/json')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
-
-      verifyRequest.write(jsonEncode({'token': token}));
-
-      final verifyResponse = await verifyRequest
-          .close()
-          .timeout(_connectionTimeout);
-
-      final verifyText = await utf8.decoder
-          .bind(verifyResponse)
-          .join()
-          .timeout(_connectionTimeout);
+      final verifyResponse = await _postJson(
+        client: client,
+        uri: _endpoint(uri, '/verify'),
+        body: {'token': token},
+      );
 
       if (verifyResponse.statusCode < 200 ||
           verifyResponse.statusCode >= 300) {
+        await verifyResponse.drain<void>();
         return false;
       }
 
-      final verifyData = jsonDecode(verifyText);
+      final verifyData = await _readResponseJson(verifyResponse);
 
-      if (verifyData is! Map<String, dynamic> ||
-          verifyData['success'] != true ||
+      if (verifyData['success'] != true ||
           verifyData['verified'] != true) {
         return false;
       }
 
-      final modeRequest = await client
-          .post(
-            uri.replace(path: '/mode', query: null, fragment: null),
-          )
-          .timeout(_connectionTimeout);
-
-      modeRequest.headers
-        ..set(HttpHeaders.contentTypeHeader, 'application/json')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
-
-      modeRequest.write(
-        jsonEncode({
+      final modeResponse = await _postJson(
+        client: client,
+        uri: _endpoint(uri, '/mode'),
+        body: {
           'token': token,
           'mode': mode,
-        }),
+        },
       );
-
-      final modeResponse = await modeRequest
-          .close()
-          .timeout(_connectionTimeout);
-
-      final modeText = await utf8.decoder
-          .bind(modeResponse)
-          .join()
-          .timeout(_connectionTimeout);
 
       if (modeResponse.statusCode < 200 ||
           modeResponse.statusCode >= 300) {
+        await modeResponse.drain<void>();
         return false;
       }
 
-      final modeData = jsonDecode(modeText);
+      final modeData = await _readResponseJson(modeResponse);
 
-      if (modeData is! Map<String, dynamic> ||
-          modeData['success'] != true ||
+      if (modeData['success'] != true ||
           modeData['mode'] != mode) {
         return false;
       }
@@ -480,13 +493,13 @@ class TransferService {
       debugPrint('Request handling failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      if (!request.response.headersSent) {
+      try {
         await _writeError(
           request.response,
           HttpStatus.internalServerError,
           'Request could not be completed.',
         );
-      } else {
+      } catch (_) {
         try {
           await request.response.close();
         } catch (_) {}
@@ -625,6 +638,25 @@ class TransferService {
   }
 
   Future<void> stopReceiver() async {
+    final existingStop = _stoppingReceiver;
+
+    if (existingStop != null) {
+      return existingStop;
+    }
+
+    final future = _stopReceiverInternal();
+    _stoppingReceiver = future;
+
+    try {
+      await future;
+    } finally {
+      if (identical(_stoppingReceiver, future)) {
+        _stoppingReceiver = null;
+      }
+    }
+  }
+
+  Future<void> _stopReceiverInternal() async {
     final server = _server;
     final tcpReceiver = _tcpReceiver;
 
@@ -659,6 +691,14 @@ class TransferService {
       throw FileSystemException('File does not exist', file.path);
     }
 
+    if (receiverIp.trim().isEmpty) {
+      throw ArgumentError.value(
+        receiverIp,
+        'receiverIp',
+        'Receiver IP address is required.',
+      );
+    }
+
     if (receiverPort < 1 || receiverPort > 65535) {
       throw ArgumentError.value(
         receiverPort,
@@ -667,7 +707,7 @@ class TransferService {
       );
     }
 
-    if (token.isEmpty) {
+    if (token.trim().isEmpty) {
       throw const FormatException('Session token is required.');
     }
 
@@ -702,6 +742,14 @@ class TransferService {
       throw FileSystemException('File does not exist', file.path);
     }
 
+    if (receiverIp.trim().isEmpty) {
+      throw ArgumentError.value(
+        receiverIp,
+        'receiverIp',
+        'Receiver IP address is required.',
+      );
+    }
+
     if (receiverPort < 1 || receiverPort > 65535) {
       throw ArgumentError.value(
         receiverPort,
@@ -710,7 +758,7 @@ class TransferService {
       );
     }
 
-    if (token.isEmpty) {
+    if (token.trim().isEmpty) {
       throw const FormatException('Session token is required.');
     }
 
@@ -727,15 +775,15 @@ class TransferService {
       );
     }
 
+    final uri = Uri(
+      scheme: 'http',
+      host: receiverIp,
+      port: receiverPort,
+      path: '/upload',
+    );
+
     final request = await client
-        .post(
-          Uri(
-            scheme: 'http',
-            host: receiverIp,
-            port: receiverPort,
-            path: '/upload',
-          ),
-        )
+        .openUrl('POST', uri)
         .timeout(_connectionTimeout);
 
     request.headers
@@ -762,21 +810,24 @@ class TransferService {
       ),
     );
 
-    await request.addStream(stream);
+    await request.addStream(stream).timeout(
+          _timeoutForMode(standardMode),
+        );
 
     final response = await request.close().timeout(
-      _standardTransferTimeout,
-    );
+          _timeoutForMode(standardMode),
+        );
 
     final responseText = await utf8.decoder
         .bind(response)
         .join()
-        .timeout(_standardTransferTimeout);
+        .timeout(_timeoutForMode(standardMode));
 
     if (response.statusCode < 200 ||
         response.statusCode >= 300) {
       throw HttpException(
         'Upload failed (${response.statusCode}): $responseText',
+        uri: uri,
       );
     }
 
