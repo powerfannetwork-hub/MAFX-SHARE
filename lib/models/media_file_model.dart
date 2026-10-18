@@ -1,6 +1,6 @@
 import 'dart:io';
 
-/// Nau'ikan fayilolin da MAFX SHARE zai iya sarrafawa.
+/// Supported file types in MAFX SHARE.
 enum MediaFileType {
   video,
   photo,
@@ -11,7 +11,7 @@ enum MediaFileType {
   other,
 }
 
-/// Bayanan fayil guda ɗaya a cikin MAFX SHARE.
+/// Represents a single file in MAFX SHARE.
 class MediaFileModel {
   final String id;
   final String name;
@@ -31,9 +31,10 @@ class MediaFileModel {
     this.mimeType,
   });
 
-  /// Ƙirƙirar MediaFileModel daga fayil da ke cikin wayar.
-  factory MediaFileModel.fromFile(File file) {
-    final stat = file.statSync();
+  /// Creates a MediaFileModel from a file.
+  static Future<MediaFileModel> fromFile(File file) async {
+    final stat = await file.stat();
+
     final name = file.uri.pathSegments.isNotEmpty
         ? file.uri.pathSegments.last
         : file.path;
@@ -49,7 +50,7 @@ class MediaFileModel {
     );
   }
 
-  /// Gane nau'in fayil ta extension.
+  /// Determines the file type from its extension.
   static MediaFileType typeFromName(String name) {
     final lowerName = name.toLowerCase();
     final dotIndex = lowerName.lastIndexOf('.');
@@ -87,7 +88,7 @@ class MediaFileModel {
     return MediaFileType.other;
   }
 
-  /// MIME type na fayil.
+  /// Returns the MIME type for a file.
   static String mimeTypeFromName(String name) {
     final lowerName = name.toLowerCase();
     final dotIndex = lowerName.lastIndexOf('.');
@@ -108,6 +109,12 @@ class MediaFileModel {
       'avi': 'video/x-msvideo',
       '3gp': 'video/3gpp',
       'ts': 'video/mp2t',
+      'mpg': 'video/mpeg',
+      'mpeg': 'video/mpeg',
+      'wmv': 'video/x-ms-wmv',
+      'flv': 'video/x-flv',
+      'm2ts': 'video/mp2t',
+      'mts': 'video/mp2t',
 
       // Photos
       'jpg': 'image/jpeg',
@@ -121,6 +128,8 @@ class MediaFileModel {
       'tif': 'image/tiff',
       'tiff': 'image/tiff',
       'svg': 'image/svg+xml',
+      'dng': 'image/x-adobe-dng',
+      'raw': 'image/x-raw',
 
       // Music
       'mp3': 'audio/mpeg',
@@ -134,6 +143,9 @@ class MediaFileModel {
       'wma': 'audio/x-ms-wma',
       'mid': 'audio/midi',
       'midi': 'audio/midi',
+      'aiff': 'audio/aiff',
+      'aif': 'audio/aiff',
+      'amr': 'audio/amr',
 
       // Documents
       'pdf': 'application/pdf',
@@ -152,124 +164,80 @@ class MediaFileModel {
       'ppt': 'application/vnd.ms-powerpoint',
       'pptx':
           'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'rtf': 'application/rtf',
+      'odt': 'application/vnd.oasis.opendocument.text',
+      'ods': 'application/vnd.oasis.opendocument.spreadsheet',
+      'odp': 'application/vnd.oasis.opendocument.presentation',
 
       // Apps and archives
       'apk': 'application/vnd.android.package-archive',
       'xapk': 'application/xapk',
+      'apks': 'application/vnd.android.package-archive',
       'zip': 'application/zip',
       'rar': 'application/vnd.rar',
       '7z': 'application/x-7z-compressed',
       'tar': 'application/x-tar',
       'gz': 'application/gzip',
+      'bz2': 'application/x-bzip2',
+      'xz': 'application/x-xz',
     };
 
     return mimeTypes[extension] ?? 'application/octet-stream';
   }
 
   static const Set<String> _videoExtensions = {
-    'mp4',
-    'm4v',
-    'mov',
-    'mkv',
-    'webm',
-    'avi',
-    '3gp',
-    'ts',
-    'mpg',
-    'mpeg',
-    'wmv',
-    'flv',
-    'm2ts',
-    'mts',
+    'mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', '3gp', 'ts',
+    'mpg', 'mpeg', 'wmv', 'flv', 'm2ts', 'mts',
   };
 
   static const Set<String> _photoExtensions = {
-    'jpg',
-    'jpeg',
-    'png',
-    'gif',
-    'webp',
-    'bmp',
-    'heic',
-    'heif',
-    'tif',
-    'tiff',
-    'svg',
-    'dng',
-    'raw',
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif',
+    'tif', 'tiff', 'svg', 'dng', 'raw',
   };
 
   static const Set<String> _musicExtensions = {
-    'mp3',
-    'm4a',
-    'aac',
-    'wav',
-    'ogg',
-    'oga',
-    'opus',
-    'flac',
-    'wma',
-    'mid',
-    'midi',
-    'aiff',
-    'aif',
-    'amr',
+    'mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'opus', 'flac',
+    'wma', 'mid', 'midi', 'aiff', 'aif', 'amr',
   };
 
   static const Set<String> _documentExtensions = {
-    'pdf',
-    'txt',
-    'csv',
-    'json',
-    'xml',
-    'html',
-    'htm',
-    'doc',
-    'docx',
-    'xls',
-    'xlsx',
-    'ppt',
-    'pptx',
-    'rtf',
-    'odt',
-    'ods',
-    'odp',
+    'pdf', 'txt', 'csv', 'json', 'xml', 'html', 'htm', 'doc',
+    'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'odt', 'ods', 'odp',
   };
 
   static const Set<String> _appExtensions = {
-    'apk',
-    'xapk',
-    'apks',
+    'apk', 'xapk', 'apks',
   };
 
   static const Set<String> _archiveExtensions = {
-    'zip',
-    'rar',
-    '7z',
-    'tar',
-    'gz',
-    'bz2',
-    'xz',
+    'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz',
   };
 
-  /// Girman fayil cikin KB, MB ko GB.
-  String get formattedSize {
-    if (sizeBytes < 1024) {
-      return '$sizeBytes B';
+  /// Formats a file size in bytes, KB, MB, or GB.
+  static String formatBytes(int bytes) {
+    if (bytes < 0) {
+      return 'Unknown size';
     }
 
-    if (sizeBytes < 1024 * 1024) {
-      return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024) {
+      return '$bytes B';
     }
 
-    if (sizeBytes < 1024 * 1024 * 1024) {
-      return '${(sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
     }
 
-    return '${(sizeBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  /// Sunan nau'in fayil don nunawa a UI.
+  /// Returns the formatted file size.
+  String get formattedSize => formatBytes(sizeBytes);
+
+  /// Returns a display label for the file type.
   String get typeLabel {
     switch (type) {
       case MediaFileType.video:
@@ -289,12 +257,10 @@ class MediaFileModel {
     }
   }
 
-  /// Ko fayil ɗin yana nan a wurin da aka ajiye shi.
-  Future<bool> get exists async {
-    return File(path).exists();
-  }
+  /// Checks whether the file exists at its path.
+  Future<bool> get exists => File(path).exists();
 
-  /// Bayanan da za a iya adanawa a JSON.
+  /// Converts the model to JSON.
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -307,7 +273,7 @@ class MediaFileModel {
     };
   }
 
-  /// Mayar da JSON zuwa MediaFileModel.
+  /// Creates a model from JSON.
   factory MediaFileModel.fromJson(Map<String, dynamic> json) {
     final typeName = json['type'] as String? ?? 'other';
 
@@ -329,7 +295,7 @@ class MediaFileModel {
     );
   }
 
-  /// Samar da sabon model idan ana son sabunta wasu bayanai.
+  /// Creates a copy of the model with updated values.
   MediaFileModel copyWith({
     String? id,
     String? name,
