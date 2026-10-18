@@ -24,6 +24,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   String _searchQuery = '';
 
   static const Color _backgroundColor = Color(0xFF101010);
+  static const Color _cardColor = Color(0xFF1C1C1C);
   static const Color _greenColor = Color(0xFF00C853);
 
   @override
@@ -33,6 +34,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   }
 
   Future<void> _loadReceivedFiles() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
     });
@@ -55,7 +58,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An samu matsala wajen loda files.'),
+          content: Text('Unable to load received files.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -123,7 +126,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${files.length} file(s) an zaɓa.'),
+          content: Text(
+            '${files.length} file(s) selected.',
+          ),
           backgroundColor: _greenColor,
         ),
       );
@@ -132,7 +137,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An kasa zaɓar files.'),
+          content: Text('Unable to select files.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -149,8 +154,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Ba a iya buɗe ${file.name}. '
-              'Ka tabbatar akwai app ɗin da zai buɗe shi.',
+              'Unable to open "${file.name}". '
+              'Make sure a compatible app is installed.',
             ),
           ),
         );
@@ -160,7 +165,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An samu matsala wajen buɗe file ɗin.'),
+          content: Text('An error occurred while opening the file.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -179,7 +184,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         },
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
-          hintText: 'Bincika files...',
+          hintText: 'Search files...',
           hintStyle: const TextStyle(color: Colors.white54),
           prefixIcon: const Icon(
             Icons.search,
@@ -199,9 +204,10 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     Icons.close,
                     color: Colors.white70,
                   ),
+                  tooltip: 'Clear search',
                 ),
           filled: true,
-          fillColor: const Color(0xFF1C1C1C),
+          fillColor: _cardColor,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide.none,
@@ -212,7 +218,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   }
 
   Widget _buildEmptyState() {
-    final searching = _searchQuery.isNotEmpty;
+    final searching = _searchQuery.trim().isNotEmpty;
 
     return Center(
       child: Padding(
@@ -229,7 +235,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              searching ? 'Ba a sami file ba' : 'Babu files da aka nuna',
+              searching ? 'No Files Found' : 'No Files Available',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
@@ -240,9 +246,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             const SizedBox(height: 8),
             Text(
               searching
-                  ? 'Gwada wani suna daban.'
-                  : 'Zaɓi files daga wayarka ko duba files '
-                      'da aka karɓa a cikin MAFX SHARE.',
+                  ? 'Try searching with a different name.'
+                  : 'Select files from your device or view files '
+                      'received through MAFX SHARE.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white60,
@@ -254,7 +260,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               ElevatedButton.icon(
                 onPressed: _pickFiles,
                 icon: const Icon(Icons.add),
-                label: const Text('Zaɓi files'),
+                label: const Text('Select Files'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _greenColor,
                   foregroundColor: Colors.black,
@@ -288,7 +294,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         actions: [
           IconButton(
             onPressed: _loadReceivedFiles,
-            tooltip: 'Sake loda files',
+            tooltip: 'Refresh files',
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -298,7 +304,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         backgroundColor: _greenColor,
         foregroundColor: Colors.black,
         icon: const Icon(Icons.add),
-        label: const Text('Zaɓi files'),
+        label: const Text('Select Files'),
       ),
       body: Column(
         children: [
@@ -391,7 +397,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     color: _greenColor,
                   ),
                   title: const Text(
-                    'Buɗe file',
+                    'Open File',
                     style: TextStyle(color: Colors.white),
                   ),
                   onTap: () {
@@ -405,7 +411,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     color: _greenColor,
                   ),
                   title: const Text(
-                    'Bayanin file',
+                    'File Details',
                     style: TextStyle(color: Colors.white),
                   ),
                   onTap: () {
@@ -428,26 +434,28 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         return AlertDialog(
           backgroundColor: const Color(0xFF202020),
           title: const Text(
-            'Bayanin file',
+            'File Details',
             style: TextStyle(color: Colors.white),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _detailRow('Suna', file.name),
-              _detailRow('Nau’i', file.typeLabel),
-              _detailRow('Girma', _formatSize(file.sizeBytes)),
-              _detailRow('Path', file.path),
-              if (file.mimeType != null)
-                _detailRow('MIME type', file.mimeType!),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _detailRow('Name', file.name),
+                _detailRow('Type', file.typeLabel),
+                _detailRow('Size', _formatSize(file.sizeBytes)),
+                _detailRow('Path', file.path),
+                if (file.mimeType != null)
+                  _detailRow('MIME Type', file.mimeType!),
+              ],
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
               child: const Text(
-                'Rufe',
+                'Close',
                 style: TextStyle(color: _greenColor),
               ),
             ),
