@@ -11,7 +11,7 @@ class TransfersScreen extends StatefulWidget {
 }
 
 class _TransfersScreenState extends State<TransfersScreen> {
-  final TransferService _transferService = TransferService();
+  final TransferService _transferService = TransferService.instance;
 
   List<Map<String, dynamic>> _transfers = [];
   bool _isLoading = true;
