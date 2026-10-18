@@ -1,5 +1,6 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:photo_manager/photo_manager.dart';
 
 import '../models/media_file_model.dart';
 import '../services/media_library_service.dart';
@@ -32,6 +33,8 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
   }
 
   Future<void> _loadPhotos() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
     });
@@ -40,9 +43,9 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
       final hasPermission =
           await _mediaService.requestPermission();
 
-      if (!hasPermission) {
-        if (!mounted) return;
+      if (!mounted) return;
 
+      if (!hasPermission) {
         setState(() {
           _hasPermission = false;
           _photos = [];
@@ -71,7 +74,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('An samu matsala wajen loda hotuna.'),
+          content: Text('Unable to load photos. Please try again.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -98,11 +101,13 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
       (item) => item.path == photo.path,
     );
 
+    if (index < 0 || _photos.isEmpty) return;
+
     await Navigator.of(context).push(
-      MaterialPageRoute(
+      MaterialPageRoute<void>(
         builder: (_) => _PhotoViewerScreen(
-          photos: _photos,
-          initialIndex: index < 0 ? 0 : index,
+          photos: List<MediaFileModel>.unmodifiable(_photos),
+          initialIndex: index,
         ),
       ),
     );
@@ -120,7 +125,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
         },
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
-          hintText: 'Bincika hotuna...',
+          hintText: 'Search photos...',
           hintStyle: const TextStyle(color: Colors.white54),
           prefixIcon: const Icon(
             Icons.search,
@@ -152,7 +157,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
   }
 
   Widget _buildEmptyState() {
-    final searching = _searchQuery.isNotEmpty;
+    final searching = _searchQuery.trim().isNotEmpty;
 
     return Center(
       child: Padding(
@@ -169,7 +174,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              searching ? 'Ba a sami hoton ba' : 'Babu hotuna',
+              searching ? 'No matching photos' : 'No photos found',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 19,
@@ -179,9 +184,9 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
             const SizedBox(height: 8),
             Text(
               searching
-                  ? 'Gwada wani suna daban.'
-                  : 'Hotunan wayarka za su bayyana a nan '
-                      'idan an ba app izinin shiga su.',
+                  ? 'Try searching with a different name.'
+                  : 'Photos on your device will appear here '
+                      'when MAFX SHARE has permission to access them.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white60,
@@ -193,7 +198,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
               OutlinedButton.icon(
                 onPressed: _loadPhotos,
                 icon: const Icon(Icons.refresh),
-                label: const Text('Sake loda'),
+                label: const Text('Refresh'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _greenColor,
                 ),
@@ -219,7 +224,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
             ),
             const SizedBox(height: 16),
             const Text(
-              'Ana buƙatar izini',
+              'Permission required',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 19,
@@ -228,8 +233,8 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Ba MAFX SHARE izinin shiga hotuna domin '
-              'ya nuna hotunan wayarka.',
+              'MAFX SHARE needs permission to access '
+              'photos on your device.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white60,
@@ -240,16 +245,30 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
             ElevatedButton.icon(
               onPressed: _loadPhotos,
               icon: const Icon(Icons.lock_open),
-              label: const Text('Sake neman izini'),
+              label: const Text('Request permission'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _greenColor,
                 foregroundColor: Colors.black,
               ),
             ),
             TextButton(
-              onPressed: _mediaService.openPermissionSettings,
+              onPressed: () async {
+                try {
+                  await _mediaService.openPermissionSettings();
+                } catch (_) {
+                  if (!mounted) return;
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Unable to open permission settings.',
+                      ),
+                    ),
+                  );
+                }
+              },
               child: const Text(
-                'Buɗe saitunan izini',
+                'Open permission settings',
                 style: TextStyle(color: Colors.white70),
               ),
             ),
@@ -275,7 +294,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
         actions: [
           IconButton(
             onPressed: _loadPhotos,
-            tooltip: 'Sake loda hotuna',
+            tooltip: 'Refresh photos',
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -294,7 +313,7 @@ class _PhotoGalleryScreenState extends State<PhotoGalleryScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '${photos.length} hotuna',
+                  '${photos.length} photos',
                   style: const TextStyle(
                     color: Colors.white60,
                     fontSize: 13,
@@ -440,15 +459,34 @@ class _PhotoViewerScreenState extends State<_PhotoViewerScreen> {
   void initState() {
     super.initState();
 
-    _currentIndex = widget.initialIndex;
+    _currentIndex = widget.initialIndex.clamp(
+      0,
+      widget.photos.length - 1,
+    );
 
     _pageController = PageController(
-      initialPage: widget.initialIndex,
+      initialPage: _currentIndex,
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.photos.isEmpty) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(
+          child: Text(
+            'No photos available.',
+            style: TextStyle(color: Colors.white70),
+          ),
+        ),
+      );
+    }
+
     final photo = widget.photos[_currentIndex];
 
     return Scaffold(
@@ -529,15 +567,16 @@ class _PhotoViewerScreenState extends State<_PhotoViewerScreen> {
             ),
             const SizedBox(width: 30),
             IconButton(
-              onPressed: _currentIndex < widget.photos.length - 1
-                  ? () {
-                      _pageController.nextPage(
-                        duration:
-                            const Duration(milliseconds: 250),
-                        curve: Curves.easeInOut,
-                      );
-                    }
-                  : null,
+              onPressed:
+                  _currentIndex < widget.photos.length - 1
+                      ? () {
+                          _pageController.nextPage(
+                            duration:
+                                const Duration(milliseconds: 250),
+                            curve: Curves.easeInOut,
+                          );
+                        }
+                      : null,
               icon: const Icon(Icons.chevron_right),
               color: _greenColor,
               iconSize: 36,
