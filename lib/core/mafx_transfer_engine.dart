@@ -9,13 +9,12 @@ import 'package:path_provider/path_provider.dart';
 /// MAFX SHARE parallel TCP file-transfer engine.
 ///
 /// Protocol:
-/// - Opens multiple TCP connections for parallel chunk transfer.
-/// - Sends a 4-byte big-endian JSON-header length.
-/// - Sends JSON metadata followed by the binary chunk.
-/// - Validates each chunk using CRC32.
-/// - Stores chunks separately and merges them in order.
-///
-/// Sender and receiver must use this same protocol.
+/// - Transfers chunks through parallel TCP connections.
+/// - Uses a 4-byte big-endian JSON-header length.
+/// - Validates chunks using CRC32.
+/// - Supports out-of-order chunk arrival.
+/// - Merges received chunks in order.
+/// - Reports sending progress.
 class MafxTransferEngine {
   MafxTransferEngine({
     this.parallelCount = 6,
@@ -48,7 +47,12 @@ class MafxTransferEngine {
     return smallChunkSize;
   }
 
-  /// Creates chunk descriptors without loading the whole file into memory.
+  /// Determines whether a file should use parallel connections.
+  bool shouldUseParallelTransfer(int fileSize) {
+    return fileSize >= parallelThreshold && parallelCount > 1;
+  }
+
+  /// Creates chunk descriptors without loading the entire file.
   Future<List<MafxChunk>> splitFile(File file) async {
     if (!await file.exists()) {
       throw FileSystemException('File does not exist', file.path);
@@ -75,7 +79,7 @@ class MafxTransferEngine {
     });
   }
 
-  /// Sends a file over multiple TCP connections.
+  /// Sends a file over parallel TCP connections.
   Future<void> sendFileParallel(
     File file,
     String receiverIp, {
@@ -110,7 +114,10 @@ class MafxTransferEngine {
     final progress = _ProgressCounter(fileSize, onProgress);
 
     var nextIndex = 0;
-    final workerCount = min(parallelCount, chunks.length);
+
+    final workerCount = shouldUseParallelTransfer(fileSize)
+        ? min(parallelCount, chunks.length)
+        : 1;
 
     Future<void> worker() async {
       while (true) {
@@ -169,7 +176,6 @@ class MafxTransferEngine {
       handle = await file.open(mode: FileMode.read);
       await handle.setPosition(chunk.offset);
 
-      // Only this chunk is loaded into memory.
       final bytes = await handle.read(chunk.length);
 
       if (bytes.length != chunk.length) {
@@ -217,9 +223,8 @@ class MafxTransferEngine {
           decoded['success'] != true ||
           decoded['fileId'] != chunk.fileId ||
           decoded['chunkIndex'] != chunk.chunkIndex) {
-        final message = decoded is Map
-            ? decoded['error']?.toString()
-            : null;
+        final message =
+            decoded is Map ? decoded['error']?.toString() : null;
 
         throw FormatException(
           message ?? 'Receiver did not acknowledge the chunk.',
@@ -234,7 +239,7 @@ class MafxTransferEngine {
     }
   }
 
-  /// Starts a receiver. Use port 0 to request an available port.
+  /// Starts a receiver. Use port 0 for an available port.
   Future<MafxReceiver> startReceiver({
     required int port,
     String bindAddress = '0.0.0.0',
@@ -261,6 +266,7 @@ class MafxTransferEngine {
 
   String createFileId() {
     final random = Random.secure();
+
     final bytes = List<int>.generate(
       16,
       (_) => random.nextInt(256),
@@ -350,6 +356,7 @@ class MafxReceiver {
 
     try {
       final prefix = await reader.readExact(4);
+
       final headerLength = ByteData.sublistView(
         Uint8List.fromList(prefix),
       ).getUint32(0, Endian.big);
@@ -441,8 +448,6 @@ class MafxReceiver {
         bytes: data,
       );
 
-      // If this was the final chunk, wait until merging succeeds
-      // before acknowledging the chunk to the sender.
       final result = await incoming.mergeIfComplete();
 
       if (result != null) {
@@ -521,7 +526,6 @@ class _IncomingFile {
   final Set<int> _received = {};
 
   Future<void> _writeQueue = Future<void>.value();
-
   Future<File>? _mergeFuture;
 
   bool get isComplete => _received.length == totalChunks;
@@ -556,8 +560,6 @@ class _IncomingFile {
       _received.add(index);
     });
 
-    // Recover the queue if this operation fails, while preserving
-    // the original error for the caller awaiting "operation".
     _writeQueue = operation.then<void>(
       (_) {},
       onError: (Object error, StackTrace stackTrace) {},
@@ -566,10 +568,7 @@ class _IncomingFile {
     await operation;
   }
 
-  /// Merges once all chunks have arrived.
-  ///
-  /// Only the first caller receives the completed file.
-  /// Other concurrent callers wait for merging and receive null.
+  /// Merges the file when all chunks have arrived.
   Future<File?> mergeIfComplete() async {
     await _writeQueue;
 
@@ -590,13 +589,12 @@ class _IncomingFile {
     try {
       return await future;
     } catch (_) {
-      // Allow a later attempt if merging failed.
       _mergeFuture = null;
       rethrow;
     }
   }
 
-  /// Merges all temporary chunk files in their original order.
+  /// Merges chunks in their original order.
   Future<File> merge() async {
     await _writeQueue;
 
@@ -644,7 +642,7 @@ class _IncomingFile {
         try {
           await sink.close();
         } catch (_) {
-          // Continue cleanup even if closing the sink fails.
+          // Continue cleanup.
         }
       }
 
@@ -653,7 +651,7 @@ class _IncomingFile {
           await output.delete();
         }
       } catch (_) {
-        // Best-effort cleanup of an incomplete output file.
+        // Best-effort cleanup.
       }
 
       rethrow;
@@ -678,8 +676,7 @@ class _IncomingFile {
   }
 }
 
-/// Maintains a single subscription to the TCP stream while reading
-/// exact byte counts or newline-delimited responses.
+/// Reads exact byte counts or newline-delimited responses from a socket.
 class _SocketReader {
   _SocketReader(Socket socket)
       : _iterator = StreamIterator<List<int>>(socket);
