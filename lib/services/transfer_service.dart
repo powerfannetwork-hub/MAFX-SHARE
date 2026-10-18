@@ -670,45 +670,78 @@ class TransferService {
   }
 
   Future<void> sendFile({
-    required File file,
-    required String receiverIp,
-    required int receiverPort,
-    required String token,
-    String? mode,
-    String? fileName,
-    int? tcpPort,
-    void Function(int sentBytes, int totalBytes)? onProgress,
-  }) async {
-    final selectedMode = mode ?? _activeMode ?? standardMode;
+  required File file,
+  required String receiverIp,
+  required int receiverPort,
+  required String token,
+  String? mode,
+  String? fileName,
+  int? tcpPort,
+  void Function(int sentBytes, int totalBytes)? onProgress,
+}) async {
+  final selectedMode = mode ?? _activeMode ?? standardMode;
 
-    if (!_isValidMode(selectedMode)) {
-      throw ArgumentError.value(
-        selectedMode,
-        'mode',
-        'Invalid transfer mode.',
-      );
-    }
-
-    if (selectedMode == highSpeedMode) {
-      await sendFileHighSpeed(
-        file: file,
-        receiverIp: receiverIp,
-        receiverPort: tcpPort ?? receiverPort,
-        token: token,
-        fileName: fileName,
-        onProgress: onProgress,
-      );
-    } else {
-      await sendFileStandard(
-        file: file,
-        receiverIp: receiverIp,
-        receiverPort: receiverPort,
-        token: token,
-        fileName: fileName,
-        onProgress: onProgress,
-      );
-    }
+  if (!_isValidMode(selectedMode)) {
+    throw ArgumentError.value(
+      selectedMode,
+      'mode',
+      'Invalid transfer mode.',
+    );
   }
+
+  if (receiverIp.trim().isEmpty) {
+    throw ArgumentError.value(
+      receiverIp,
+      'receiverIp',
+      'Receiver IP address is required.',
+    );
+  }
+
+  if (token.trim().isEmpty) {
+    throw const FormatException(
+      'Session token is required.',
+    );
+  }
+
+  if (selectedMode == highSpeedMode) {
+    if (tcpPort == null || tcpPort < 1 || tcpPort > 65535) {
+      throw ArgumentError.value(
+        tcpPort,
+        'tcpPort',
+        'A valid TCP port is required for 5G+ mode. '
+            'Reconnect using a new QR code.',
+      );
+    }
+
+    await sendFileHighSpeed(
+      file: file,
+      receiverIp: receiverIp,
+      receiverPort: tcpPort,
+      token: token,
+      fileName: fileName,
+      onProgress: onProgress,
+    );
+
+    return;
+  }
+
+  if (receiverPort < 1 || receiverPort > 65535) {
+    throw ArgumentError.value(
+      receiverPort,
+      'receiverPort',
+      'A valid HTTP port is required for STANDARD mode.',
+    );
+  }
+
+  await sendFileStandard(
+    file: file,
+    receiverIp: receiverIp,
+    receiverPort: receiverPort,
+    token: token,
+    fileName: fileName,
+    onProgress: onProgress,
+  );  
+}
 
   Future<void> recordTransfer({
     required String fileName,
