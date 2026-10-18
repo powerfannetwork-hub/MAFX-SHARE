@@ -1,61 +1,27 @@
 name: mafx_share
 description: "MAFX SHARE - Share files between devices."
 publish_to: 'none'
-
 version: 1.0.0+1
 
 environment:
-sdk: '>=3.3.0 <4.0.0'
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
-flutter:
-sdk: flutter
-
-cupertino_icons: ^1.0.8
-
-File selection
-
-file_picker: ^8.0.0
-
-Browse photos, videos and media
-
-photo_manager: ^3.7.1
-
-Device information
-
-device_info_plus: ^11.3.0
-
-Open received files
-
-open_filex: ^4.7.0
-
-QR code support
-
-qr_flutter: ^4.1.0
-mobile_scanner: ^6.0.2
-
-Network requests
-
-http: ^1.2.2
-
-Local storage
-
-path_provider: ^2.1.5
-shared_preferences: ^2.3.3
-
-Permissions
-
-permission_handler: ^11.3.1
-
-LZ4 compression
-
-dart_lz4: ^1.2.0
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  file_picker: ^8.0.0
+  photo_manager: ^3.7.1
+  open_filex: ^4.7.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^6.0.2
+  path_provider: ^2.1.5
+  shared_preferences: ^2.3.3
 
 dev_dependencies:
-flutter_test:
-sdk: flutter
-
-flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
 
 flutter:
-uses-material-design: true
+  uses-material-design: true
