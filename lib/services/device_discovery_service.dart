@@ -2,20 +2,27 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-/// Discovers MAFX SHARE devices on the same local network using UDP.
+/// Discovers MAFX SHARE devices connected to the same local network.
 class DeviceDiscoveryService {
   DeviceDiscoveryService({
     this.discoveryPort = 45872,
     this.discoveryInterval = const Duration(seconds: 3),
-  });
+    this.deviceTimeout = const Duration(seconds: 12),
+  })  : assert(discoveryPort > 0 && discoveryPort <= 65535),
+        assert(discoveryInterval > Duration.zero),
+        assert(deviceTimeout > Duration.zero);
 
   final int discoveryPort;
   final Duration discoveryInterval;
+  final Duration deviceTimeout;
 
   RawDatagramSocket? _socket;
   Timer? _discoveryTimer;
+  Timer? _cleanupTimer;
 
   bool _running = false;
+  bool _disposed = false;
+
   String? _deviceName;
   String? _sessionToken;
   int? _httpPort;
@@ -24,12 +31,20 @@ class DeviceDiscoveryService {
   final StreamController<Map<String, dynamic>> _devicesController =
       StreamController<Map<String, dynamic>>.broadcast();
 
+  final Map<String, Map<String, dynamic>> _knownDevices = {};
   final Map<String, DateTime> _lastSeen = {};
 
-  /// Stream of discovered MAFX SHARE devices.
+  /// Emits devices discovered on the local network.
   Stream<Map<String, dynamic>> get devices => _devicesController.stream;
 
+  /// Returns true when discovery is running.
   bool get isRunning => _running;
+
+  /// Returns the latest list of discovered devices.
+  List<Map<String, dynamic>> get discoveredDevices =>
+      _knownDevices.values
+          .map((device) => Map<String, dynamic>.from(device))
+          .toList(growable: false);
 
   /// Starts listening for nearby MAFX SHARE devices.
   Future<void> startListening({
@@ -38,55 +53,106 @@ class DeviceDiscoveryService {
     required int httpPort,
     required int tcpPort,
   }) async {
+    if (_disposed) {
+      throw StateError('DeviceDiscoveryService has been disposed.');
+    }
+
     if (_running) return;
 
-    if (deviceName.trim().isEmpty || sessionToken.trim().isEmpty) {
-      throw ArgumentError('Device name and session token are required.');
+    final name = deviceName.trim();
+    final token = sessionToken.trim();
+
+    if (name.isEmpty || token.isEmpty) {
+      throw ArgumentError(
+        'Device name and session token are required.',
+      );
     }
 
-    if (httpPort < 1 ||
-        httpPort > 65535 ||
-        tcpPort < 1 ||
-        tcpPort > 65535) {
-      throw ArgumentError('Invalid receiver port.');
-    }
+    _validatePort(httpPort, 'httpPort');
+    _validatePort(tcpPort, 'tcpPort');
 
-    _deviceName = deviceName.trim();
-    _sessionToken = sessionToken;
+    _deviceName = name;
+    _sessionToken = token;
     _httpPort = httpPort;
     _tcpPort = tcpPort;
 
-    final socket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      discoveryPort,
-      reuseAddress: true,
-      reusePort: false,
-    );
+    RawDatagramSocket? socket;
 
-    _socket = socket;
-    socket.broadcastEnabled = true;
-    _running = true;
+    try {
+      socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        discoveryPort,
+        reuseAddress: true,
+        reusePort: false,
+      );
 
-    socket.listen(
-      _handleSocketEvent,
-      onError: (Object error, StackTrace stackTrace) {
-        stderr.writeln('MAFX discovery socket error: $error');
-      },
-      onDone: () {
-        _running = false;
-      },
-      cancelOnError: false,
-    );
+      if (_disposed) {
+        socket.close();
+        throw StateError('DeviceDiscoveryService has been disposed.');
+      }
 
-    _discoveryTimer = Timer.periodic(
-      discoveryInterval,
-      (_) => _broadcastPresence(),
-    );
+      socket.broadcastEnabled = true;
+      _socket = socket;
+      _running = true;
 
-    await _broadcastPresence();
+      socket.listen(
+        _handleSocketEvent,
+        onError: (Object error, StackTrace stackTrace) {
+          stderr.writeln('MAFX discovery socket error: $error');
+        },
+        onDone: () {
+          _running = false;
+        },
+        cancelOnError: false,
+      );
+
+      _discoveryTimer = Timer.periodic(
+        discoveryInterval,
+        (_) => _broadcastPresence(),
+      );
+
+      _cleanupTimer = Timer.periodic(
+        const Duration(seconds: 3),
+        (_) => _removeExpiredDevices(),
+      );
+
+      await _broadcastPresence();
+    } catch (_) {
+      _discoveryTimer?.cancel();
+      _discoveryTimer = null;
+
+      _cleanupTimer?.cancel();
+      _cleanupTimer = null;
+
+      _running = false;
+
+      if (identical(_socket, socket)) {
+        _socket = null;
+      }
+
+      socket?.close();
+
+      _deviceName = null;
+      _sessionToken = null;
+      _httpPort = null;
+      _tcpPort = null;
+
+      rethrow;
+    }
   }
 
-  /// Sends a UDP announcement to devices on the local network.
+  /// Validates a TCP or HTTP port.
+  void _validatePort(int port, String fieldName) {
+    if (port < 1 || port > 65535) {
+      throw ArgumentError.value(
+        port,
+        fieldName,
+        'Port must be between 1 and 65535.',
+      );
+    }
+  }
+
+  /// Announces this device to other devices on the local network.
   Future<void> _broadcastPresence() async {
     final socket = _socket;
 
@@ -115,20 +181,21 @@ class DeviceDiscoveryService {
     }
   }
 
+  /// Handles incoming UDP events.
   void _handleSocketEvent(RawSocketEvent event) {
     if (event != RawSocketEvent.read) return;
 
     final socket = _socket;
-    if (socket == null) return;
+    if (socket == null || !_running) return;
 
     Datagram? datagram;
 
     while ((datagram = socket.receive()) != null) {
-      final packet = datagram!;
-      _processDatagram(packet);
+      _processDatagram(datagram!);
     }
   }
 
+  /// Processes an announcement from another MAFX SHARE device.
   void _processDatagram(Datagram datagram) {
     try {
       final decoded = jsonDecode(utf8.decode(datagram.data));
@@ -154,44 +221,82 @@ class DeviceDiscoveryService {
         return;
       }
 
-      // Ignore our own discovery announcement.
+      // Ignore this device's own announcement.
       if (httpPort == _httpPort &&
           tcpPort == _tcpPort &&
-          decoded['deviceName'] == _deviceName) {
+          deviceName.trim() == _deviceName) {
         return;
       }
 
-      final deviceKey = '$senderIp:$httpPort';
-      _lastSeen[deviceKey] = DateTime.now();
+      final key = '$senderIp:$httpPort';
+      final now = DateTime.now();
 
-      _devicesController.add({
+      final device = <String, dynamic>{
         'app': 'MAFX_SHARE',
         'version': 1,
         'ip': senderIp,
-        'deviceName': deviceName,
+        'deviceName': deviceName.trim(),
         'httpPort': httpPort,
         'tcpPort': tcpPort,
-        'lastSeen': DateTime.now(),
-      });
+        'lastSeen': now,
+      };
+
+      _lastSeen[key] = now;
+      _knownDevices[key] = device;
+
+      if (!_devicesController.isClosed) {
+        _devicesController.add(
+          Map<String, dynamic>.from(device),
+        );
+      }
     } catch (error) {
       stderr.writeln('Ignoring invalid MAFX discovery packet: $error');
     }
   }
 
-  /// Returns the latest time a device was discovered.
+  /// Removes devices that have stopped announcing their presence.
+  void _removeExpiredDevices() {
+    final now = DateTime.now();
+    final expiredKeys = <String>[];
+
+    for (final entry in _lastSeen.entries) {
+      if (now.difference(entry.value) > deviceTimeout) {
+        expiredKeys.add(entry.key);
+      }
+    }
+
+    for (final key in expiredKeys) {
+      _lastSeen.remove(key);
+
+      final removed = _knownDevices.remove(key);
+
+      if (removed != null && !_devicesController.isClosed) {
+        _devicesController.add({
+          ...removed,
+          'unavailable': true,
+        });
+      }
+    }
+  }
+
+  /// Returns the last time a device was discovered.
   DateTime? lastSeenAt(String ip, int port) {
     return _lastSeen['$ip:$port'];
   }
 
-  /// Stops UDP discovery and releases the socket.
+  /// Stops discovery and releases its network resources.
   Future<void> stop() async {
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
 
+    _cleanupTimer?.cancel();
+    _cleanupTimer = null;
+
     _running = false;
 
-    _socket?.close();
+    final socket = _socket;
     _socket = null;
+    socket?.close();
 
     _deviceName = null;
     _sessionToken = null;
@@ -199,11 +304,16 @@ class DeviceDiscoveryService {
     _tcpPort = null;
 
     _lastSeen.clear();
+    _knownDevices.clear();
   }
 
-  /// Releases all resources owned by this service.
+  /// Disposes this service permanently.
   Future<void> dispose() async {
+    if (_disposed) return;
+
     await stop();
+    _disposed = true;
+
     await _devicesController.close();
   }
 }
