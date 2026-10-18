@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -24,6 +26,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _showControls = true;
   bool _isFullScreen = false;
   bool _isMuted = false;
+  bool _isLoading = true;
 
   double _volume = 1.0;
 
@@ -34,31 +37,67 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _initializePlayer() async {
-    try {
-      final controller = VideoPlayerController.networkUrl(
-        Uri.file(widget.videoPath),
-      );
+    final oldController = _controller;
+    _controller = null;
 
+    if (oldController != null) {
+      await oldController.dispose();
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _isInitialized = false;
+      _hasError = false;
+    });
+
+    VideoPlayerController? controller;
+
+    try {
+      final file = File(widget.videoPath);
+
+      if (!await file.exists()) {
+        throw FileSystemException(
+          'Ba a sami fayil ɗin bidiyon ba.',
+          widget.videoPath,
+        );
+      }
+
+      controller = VideoPlayerController.file(file);
       _controller = controller;
 
       await controller.initialize();
-      await controller.setVolume(_volume);
+      await controller.setVolume(_isMuted ? 0 : _volume);
       await controller.setLooping(false);
 
-      if (!mounted) return;
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
 
       setState(() {
         _isInitialized = true;
         _hasError = false;
+        _isLoading = false;
       });
 
-      controller.play();
-    } catch (_) {
+      await controller.play();
+    } catch (error) {
+      if (controller != null) {
+        await controller.dispose();
+
+        if (identical(_controller, controller)) {
+          _controller = null;
+        }
+      }
+
       if (!mounted) return;
 
       setState(() {
         _hasError = true;
         _isInitialized = false;
+        _isLoading = false;
       });
     }
   }
@@ -86,16 +125,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     if (controller == null) return;
 
-    if (_isMuted) {
-      await controller.setVolume(_volume);
-    } else {
-      await controller.setVolume(0);
-    }
+    final mute = !_isMuted;
+
+    await controller.setVolume(mute ? 0 : _volume);
 
     if (!mounted) return;
 
     setState(() {
-      _isMuted = !_isMuted;
+      _isMuted = mute;
     });
   }
 
@@ -135,6 +172,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     await controller.seekTo(newPosition);
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _toggleFullScreen() async {
@@ -209,8 +250,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Ka tabbatar cewa bidiyon yana nan kuma tsarin wayarka '
-              'yana iya kunna wannan nau’in bidiyo.',
+              'Ka tabbatar cewa bidiyon yana nan, '
+              'kuma wayarka tana iya kunna tsarin bidiyon.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white70,
@@ -219,13 +260,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: () {
-                setState(() {
-                  _hasError = false;
-                });
-
-                _initializePlayer();
-              },
+              onPressed: _initializePlayer,
               icon: const Icon(Icons.refresh),
               label: const Text('Sake gwadawa'),
             ),
@@ -252,7 +287,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
             color: Colors.black26,
             child: Column(
               children: [
-                // Top bar.
                 Row(
                   children: [
                     IconButton(
@@ -285,10 +319,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     ),
                   ],
                 ),
-
                 const Spacer(),
-
-                // Main playback controls.
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -322,10 +353,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     ),
                   ],
                 ),
-
                 const Spacer(),
-
-                // Bottom timeline and settings.
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Column(
@@ -343,9 +371,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       Row(
                         children: [
                           Text(
-                            _formatDuration(
-                              controller.value.position,
-                            ),
+                            _formatDuration(controller.value.position),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 12,
@@ -356,9 +382,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             style: TextStyle(color: Colors.white70),
                           ),
                           Text(
-                            _formatDuration(
-                              controller.value.duration,
-                            ),
+                            _formatDuration(controller.value.duration),
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 12,
@@ -423,7 +447,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         bottom: !_isFullScreen,
         child: _hasError
             ? _buildErrorView()
-            : !_isInitialized || controller == null
+            : _isLoading || !_isInitialized || controller == null
                 ? const Center(
                     child: CircularProgressIndicator(
                       color: Color(0xFF00C853),
@@ -441,10 +465,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       children: [
                         Center(
                           child: AspectRatio(
-                            aspectRatio:
-                                controller.value.aspectRatio > 0
-                                    ? controller.value.aspectRatio
-                                    : 16 / 9,
+                            aspectRatio: controller.value.aspectRatio > 0
+                                ? controller.value.aspectRatio
+                                : 16 / 9,
                             child: VideoPlayer(controller),
                           ),
                         ),
