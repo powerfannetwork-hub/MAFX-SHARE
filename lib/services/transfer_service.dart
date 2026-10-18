@@ -119,10 +119,11 @@ class TransferService {
 
     try {
       final verifyRequest = await client
-          .post(
-            uri.replace(path: '/verify', query: null, fragment: null),
-          )
-          .timeout(_connectionTimeout);
+    .openUrl(
+      'POST',
+      uri.replace(path: '/verify', query: null, fragment: null),
+    )
+    .timeout(_connectionTimeout);
 
       verifyRequest.headers
         ..set(HttpHeaders.contentTypeHeader, 'application/json')
