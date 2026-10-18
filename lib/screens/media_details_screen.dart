@@ -44,7 +44,7 @@ class MediaDetailsScreen extends StatelessWidget {
   }
 
   Future<void> _openFile(BuildContext context) async {
-    if (!media.exists) {
+    if (!await media.exists) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Ba a sami wannan fayil ɗin a na’ura ba.'),
