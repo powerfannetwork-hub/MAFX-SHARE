@@ -27,9 +27,11 @@ class _TransferHistoryScreenState
   }
 
   Future<void> _loadHistory() async {
-    setState(() {
-      _loading = true;
-    });
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -64,20 +66,20 @@ class _TransferHistoryScreenState
         _loading = false;
       });
 
-      _showMessage('An kasa loda tarihin transfer.');
+      _showMessage('Unable to load transfer history.');
     }
   }
 
   Future<void> _clearHistory() async {
-    if (_clearing || _history.isEmpty) return;
+    if (_clearing || _loading || _history.isEmpty) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Clear Transfer History?'),
         content: const Text(
-          'Wannan zai goge tarihin transfers kawai. '
-          'Ba zai goge fayilolin da aka adana ba.',
+          'This will permanently clear your transfer history. '
+          'It will not delete any files stored on your device.',
         ),
         actions: [
           TextButton(
@@ -90,7 +92,7 @@ class _TransferHistoryScreenState
             onPressed: () {
               Navigator.pop(dialogContext, true);
             },
-            child: const Text('Clear'),
+            child: const Text('Clear History'),
           ),
         ],
       ),
@@ -104,18 +106,27 @@ class _TransferHistoryScreenState
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_storageKey);
+      final success = await prefs.remove(_storageKey);
 
       if (!mounted) return;
+
+      if (!success) {
+        setState(() {
+          _clearing = false;
+        });
+
+        _showMessage('Unable to clear transfer history.');
+        return;
+      }
 
       setState(() {
         _history.clear();
         _clearing = false;
       });
 
-      _showMessage('An share tarihin transfer.');
+      _showMessage('Transfer history cleared.');
     } catch (error) {
-      debugPrint('Could not clear history: $error');
+      debugPrint('Could not clear transfer history: $error');
 
       if (!mounted) return;
 
@@ -123,7 +134,7 @@ class _TransferHistoryScreenState
         _clearing = false;
       });
 
-      _showMessage('An kasa share tarihin transfer.');
+      _showMessage('Unable to clear transfer history.');
     }
   }
 
@@ -177,7 +188,11 @@ class _TransferHistoryScreenState
   }
 
   Widget _buildHistoryItem(Map<String, dynamic> item) {
-    final fileName = item['fileName']?.toString() ?? 'Unknown file';
+    final fileName =
+        item['fileName']?.toString().trim().isNotEmpty == true
+            ? item['fileName'].toString()
+            : 'Unknown file';
+
     final direction = item['direction']?.toString().toLowerCase();
     final isSent = direction == 'sent';
 
@@ -239,6 +254,7 @@ class _TransferHistoryScreenState
               ),
               const SizedBox(height: 5),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Icon(
                     Icons.access_time_rounded,
@@ -247,7 +263,9 @@ class _TransferHistoryScreenState
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      _formatDate(item['completedAt'] ?? item['timestamp'])
+                      _formatDate(
+                        item['completedAt'] ?? item['timestamp'],
+                      ),
                     ),
                   ),
                 ],
@@ -267,7 +285,7 @@ class _TransferHistoryScreenState
         actions: [
           IconButton(
             tooltip: 'Refresh history',
-            onPressed: _loading ? null : _loadHistory,
+            onPressed: _loading || _clearing ? null : _loadHistory,
             icon: const Icon(Icons.refresh_rounded),
           ),
           if (_history.isNotEmpty)
