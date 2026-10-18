@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../services/device_discovery_service.dart';
 import '../services/transfer_service.dart';
 import 'qr_screen.dart';
 import 'scan_qr_screen.dart';
@@ -30,11 +31,15 @@ class ConnectScreen extends StatefulWidget {
 class _ConnectScreenState extends State<ConnectScreen>
     with WidgetsBindingObserver {
   final TransferService _service = TransferService.instance;
+  final DeviceDiscoveryService _discovery = DeviceDiscoveryService();
+
+  StreamSubscription<Map<String, dynamic>>? _discoverySubscription;
 
   bool _loading = false;
   bool _receiverStarted = false;
   bool _connected = false;
   bool _checkingReceiver = false;
+  bool _discoveryStarted = false;
 
   String _status = 'Ready to connect';
   String _transferMode = 'STANDARD';
@@ -49,6 +54,8 @@ class _ConnectScreenState extends State<ConnectScreen>
 
   Timer? _receiverMonitor;
 
+  final Map<String, Map<String, dynamic>> _nearbyDevices = {};
+
   String? get _localToken => _service.sessionToken;
 
   bool get _isSender => widget.role == TransferRole.send;
@@ -59,7 +66,7 @@ class _ConnectScreenState extends State<ConnectScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _status = _isSender
-        ? 'Scan the receiver QR code to connect.'
+        ? 'Scan the receiver QR code or select a discovered device.'
         : 'Prepare this phone to receive files.';
   }
 
@@ -131,6 +138,84 @@ class _ConnectScreenState extends State<ConnectScreen>
       return null;
     }
   }
+
+  Future<void> _startDiscovery() async {
+    if (_discoveryStarted || !_isSender || _disposed) return;
+
+    final ip = await _getLocalIp();
+
+    if (!mounted || _disposed) return;
+
+    if (ip == null) {
+      setState(() {
+        _status = 'Network unavailable. Check Wi-Fi or hotspot.';
+      });
+      return;
+    }
+
+    try {
+      final discoveryToken =
+          _localToken ?? 'discovery-${DateTime.now().millisecondsSinceEpoch}';
+
+      await _discovery.startListening(
+        deviceName: 'MAFX-ANDROID',
+        sessionToken: discoveryToken,
+        httpPort: _service.httpPort,
+        tcpPort: _service.tcpPort ?? _service.httpPort,
+      );
+
+      if (!mounted || _disposed) {
+        await _discovery.stop();
+        return;
+      }
+
+      _discoveryStarted = true;
+
+      _discoverySubscription ??= _discovery.devices.listen(
+        (device) {
+          if (!mounted) return;
+
+          final ipValue = device['ip'];
+          final portValue = device['httpPort'];
+
+          if (ipValue is! String || portValue is! int) return;
+
+          final key = '$ipValue:$portValue';
+
+          setState(() {
+            if (device['unavailable'] == true) {
+              _nearbyDevices.remove(key);
+            } else {
+              _nearbyDevices[key] = device;
+            }
+          });
+        },
+        onError: (Object error) {
+          debugPrint('Discovery stream error: $error');
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _status = _nearbyDevices.isEmpty
+              ? 'Searching for nearby MAFX SHARE devices...'
+              : 'Nearby devices found.';
+        });
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Device discovery failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      if (!mounted) return;
+
+      setState(() {
+        _status =
+            'Automatic discovery unavailable. You can still scan a QR code.';
+      });
+    }
+  }
+
+  bool _disposed = false;
 
   void _startReceiverMonitor() {
     _receiverMonitor?.cancel();
@@ -340,6 +425,10 @@ class _ConnectScreenState extends State<ConnectScreen>
   Future<void> _scanQr() async {
     if (_loading || !_isSender) return;
 
+    await _startDiscovery();
+
+    if (!mounted) return;
+
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute<Map<String, dynamic>>(
@@ -349,6 +438,28 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     if (!mounted || result == null) return;
 
+    await _connectToPeer(result);
+  }
+
+  Future<void> _connectToDiscoveredDevice(
+    Map<String, dynamic> device,
+  ) async {
+    final ip = device['ip'];
+    final port = device['httpPort'];
+    final tcpPort = device['tcpPort'];
+
+    if (ip is! String || port is! int || tcpPort is! int) {
+      _message('Invalid discovered device.');
+      return;
+    }
+
+    _message(
+      'Automatic device discovery does not provide the secure session token. '
+      'Scan the receiver QR code to connect safely.',
+    );
+  }
+
+  Future<void> _connectToPeer(Map<String, dynamic> result) async {
     final ipValue = result['ip'];
     final portValue = result['port'];
     final tcpPortValue = result['tcpPort'];
@@ -537,8 +648,13 @@ class _ConnectScreenState extends State<ConnectScreen>
 
   @override
   void dispose() {
+    _disposed = true;
     _stopReceiverMonitor();
     WidgetsBinding.instance.removeObserver(this);
+
+    unawaited(_discoverySubscription?.cancel());
+    unawaited(_discovery.dispose());
+
     super.dispose();
   }
 
@@ -585,7 +701,7 @@ class _ConnectScreenState extends State<ConnectScreen>
             const SizedBox(height: 10),
             Text(
               _isSender
-                  ? 'Scan the receiver QR code. File selection opens after authentication.'
+                  ? 'Scan the receiver QR code to connect securely.'
                   : 'Prepare this phone, then show its QR code to the sending phone.',
               textAlign: TextAlign.center,
               style: const TextStyle(
@@ -598,14 +714,17 @@ class _ConnectScreenState extends State<ConnectScreen>
             if (!_isSender) ...[
               _ActionButton(
                 icon: Icons.wifi_rounded,
-                title: _receiverStarted ? 'Receiver Ready' : 'Prepare to Receive',
-                onPressed: _loading || _receiverStarted ? null : _prepareReceiver,
+                title:
+                    _receiverStarted ? 'Receiver Ready' : 'Prepare to Receive',
+                onPressed:
+                    _loading || _receiverStarted ? null : _prepareReceiver,
               ),
               const SizedBox(height: 14),
               _ActionButton(
                 icon: Icons.qr_code_2_rounded,
                 title: 'Show My QR Code',
-                onPressed: _loading || !_receiverStarted ? null : _showMyQr,
+                onPressed:
+                    _loading || !_receiverStarted ? null : _showMyQr,
               ),
               if (_localIp != null) ...[
                 const SizedBox(height: 12),
@@ -619,7 +738,9 @@ class _ConnectScreenState extends State<ConnectScreen>
             if (_isSender) ...[
               _ActionButton(
                 icon: Icons.qr_code_scanner_rounded,
-                title: _loading ? 'Authenticating Connection...' : 'Scan Receiver QR Code',
+                title: _loading
+                    ? 'Authenticating Connection...'
+                    : 'Scan Receiver QR Code',
                 onPressed: _loading ? null : _scanQr,
               ),
               const SizedBox(height: 12),
@@ -628,6 +749,45 @@ class _ConnectScreenState extends State<ConnectScreen>
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white60, height: 1.5),
               ),
+              const SizedBox(height: 20),
+              const Text(
+                'Nearby devices',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_nearbyDevices.isEmpty)
+                const Text(
+                  'Device discovery runs while you open the QR scanner. '
+                  'If no devices appear, use the receiver QR code.',
+                  style: TextStyle(color: Colors.white60, height: 1.4),
+                )
+              else
+                ..._nearbyDevices.values.map(
+                  (device) => Card(
+                    color: Colors.white10,
+                    child: ListTile(
+                      leading: const Icon(
+                        Icons.phone_android_rounded,
+                        color: Color(0xFF00D18B),
+                      ),
+                      title: Text(
+                        device['deviceName']?.toString() ?? 'MAFX device',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        '${device['ip']}:${device['httpPort']}',
+                        style: const TextStyle(color: Colors.white60),
+                      ),
+                      onTap: _loading
+                          ? null
+                          : () => _connectToDiscoveredDevice(device),
+                    ),
+                  ),
+                ),
             ],
             const SizedBox(height: 24),
             Container(
@@ -636,21 +796,30 @@ class _ConnectScreenState extends State<ConnectScreen>
                 color: Colors.white.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: _connected ? const Color(0xFF00D18B) : Colors.white12,
+                  color: _connected
+                      ? const Color(0xFF00D18B)
+                      : Colors.white12,
                 ),
               ),
               child: Column(
                 children: [
                   Icon(
-                    _connected ? Icons.check_circle_rounded : Icons.info_outline_rounded,
-                    color: _connected ? const Color(0xFF00D18B) : Colors.white70,
+                    _connected
+                        ? Icons.check_circle_rounded
+                        : Icons.info_outline_rounded,
+                    color: _connected
+                        ? const Color(0xFF00D18B)
+                        : Colors.white70,
                     size: 34,
                   ),
                   const SizedBox(height: 12),
                   Text(
                     _status,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 15),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                    ),
                   ),
                   if (_connected) ...[
                     const SizedBox(height: 8),
@@ -669,7 +838,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                   ],
                   if (_loading) ...[
                     const SizedBox(height: 16),
-                    const CircularProgressIndicator(color: Color(0xFF00D18B)),
+                    const CircularProgressIndicator(
+                      color: Color(0xFF00D18B),
+                    ),
                   ],
                 ],
               ),
@@ -680,7 +851,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                 onPressed: _loading ? null : _stopReceiver,
                 icon: const Icon(Icons.stop_circle_outlined),
                 label: const Text('Stop Receiver'),
-                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                ),
               ),
             ],
           ],
@@ -711,7 +884,10 @@ class _ActionButton extends StatelessWidget {
         label: Text(
           title,
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF008D5A),
