@@ -247,7 +247,7 @@ class _TransferHistoryScreenState
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      _formatDate(item['completedAt']),
+                      _formatDate(item['completedAt'] ?? item['timestamp'])
                     ),
                   ),
                 ],
