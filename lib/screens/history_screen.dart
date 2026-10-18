@@ -254,8 +254,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     final bytes = item['bytes'];
 
-    final completedAt = item['completedAt'];
-
+    final completedAt = item['completedAt'] ?? item['timestamp'];
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
