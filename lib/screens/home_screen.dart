@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'connect_screen.dart';
+import 'file_manager_screen.dart';
+import 'music_library_screen.dart';
+import 'photo_gallery_screen.dart';
 import 'transfer_history_screen.dart';
+import 'video_library_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
