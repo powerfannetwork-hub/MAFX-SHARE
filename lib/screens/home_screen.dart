@@ -77,6 +77,38 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openLibrary(String category) {
+  final Widget screen;
+
+  switch (category) {
+    case 'photos':
+      screen = const PhotoGalleryScreen();
+      break;
+
+    case 'videos':
+      screen = const VideoLibraryScreen();
+      break;
+
+    case 'music':
+      screen = const MusicLibraryScreen();
+      break;
+
+    case 'files':
+      screen = const FileManagerScreen();
+      break;
+
+    default:
+      _openSend(category: category);
+      return;
+  }
+
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => screen,
+    ),
+  );
+}
+  
   void _openTransferHistory() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
