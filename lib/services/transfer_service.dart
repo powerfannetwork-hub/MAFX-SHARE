@@ -596,9 +596,14 @@ class TransferService {
     final size = await file.length();
 
     final name = _sanitizeFileName(
-      fileName ?? getReceivedFileName(file),
-    );
+  fileName ?? getReceivedFileName(file),
+);
 
+if (name.isEmpty) {
+  throw const FormatException(
+    'Invalid file name. Please select the file again.',
+  );
+}
     final request = await client
         .post(
           Uri(
