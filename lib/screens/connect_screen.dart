@@ -34,15 +34,19 @@ class _ConnectScreenState extends State<ConnectScreen>
   final DeviceDiscoveryService _discovery = DeviceDiscoveryService();
 
   StreamSubscription<Map<String, dynamic>>? _discoverySubscription;
+  Timer? _receiverMonitor;
+
+  final Map<String, Map<String, dynamic>> _nearbyDevices = {};
 
   bool _loading = false;
   bool _receiverStarted = false;
   bool _connected = false;
   bool _checkingReceiver = false;
   bool _discoveryStarted = false;
+  bool _disposed = false;
 
   String _status = 'Ready to connect';
-  String _transferMode = 'STANDARD';
+  String _transferMode = TransferService.standardMode;
 
   String? _peerIp;
   String? _peerUrl;
@@ -52,13 +56,9 @@ class _ConnectScreenState extends State<ConnectScreen>
   int? _localPort;
   int? _peerTcpPort;
 
-  Timer? _receiverMonitor;
-
-  final Map<String, Map<String, dynamic>> _nearbyDevices = {};
+  bool get _isSender => widget.role == TransferRole.send;
 
   String? get _localToken => _service.sessionToken;
-
-  bool get _isSender => widget.role == TransferRole.send;
 
   @override
   void initState() {
@@ -66,8 +66,12 @@ class _ConnectScreenState extends State<ConnectScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _status = _isSender
-        ? 'Scan the receiver QR code or select a discovered device.'
+        ? 'Scan the receiver QR code to connect securely.'
         : 'Prepare this phone to receive files.';
+
+    if (!_isSender) {
+      unawaited(_startDiscovery());
+    }
   }
 
   void _message(String message) {
@@ -140,7 +144,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   }
 
   Future<void> _startDiscovery() async {
-    if (_discoveryStarted || !_isSender || _disposed) return;
+    if (_discoveryStarted || _disposed) return;
 
     final ip = await _getLocalIp();
 
@@ -153,15 +157,28 @@ class _ConnectScreenState extends State<ConnectScreen>
       return;
     }
 
+    // Discovery service requires valid ports. On the sending phone,
+    // use harmless local port values because it is not the receiver.
+    // The receiver advertises its real HTTP and TCP ports after startup.
+    final httpPort = _service.port ?? 45872;
+    final tcpPort = _service.tcpPort ?? 45873;
+    final token = _localToken ??
+        'discovery-${DateTime.now().millisecondsSinceEpoch}';
+
     try {
-      final discoveryToken =
-          _localToken ?? 'discovery-${DateTime.now().millisecondsSinceEpoch}';
+      _discoverySubscription ??= _discovery.devices.listen(
+        _handleDiscoveredDevice,
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint('Discovery stream error: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        },
+      );
 
       await _discovery.startListening(
         deviceName: 'MAFX-ANDROID',
-        sessionToken: discoveryToken,
-        httpPort: _service.httpPort,
-        tcpPort: _service.tcpPort ?? _service.httpPort,
+        sessionToken: token,
+        httpPort: httpPort,
+        tcpPort: tcpPort,
       );
 
       if (!mounted || _disposed) {
@@ -171,37 +188,9 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       _discoveryStarted = true;
 
-      _discoverySubscription ??= _discovery.devices.listen(
-        (device) {
-          if (!mounted) return;
-
-          final ipValue = device['ip'];
-          final portValue = device['httpPort'];
-
-          if (ipValue is! String || portValue is! int) return;
-
-          final key = '$ipValue:$portValue';
-
-          setState(() {
-            if (device['unavailable'] == true) {
-              _nearbyDevices.remove(key);
-            } else {
-              _nearbyDevices[key] = device;
-            }
-          });
-        },
-        onError: (Object error) {
-          debugPrint('Discovery stream error: $error');
-        },
-      );
-
-      if (mounted) {
-        setState(() {
-          _status = _nearbyDevices.isEmpty
-              ? 'Searching for nearby MAFX SHARE devices...'
-              : 'Nearby devices found.';
-        });
-      }
+      setState(() {
+        _status = 'Searching for nearby MAFX SHARE devices...';
+      });
     } catch (error, stackTrace) {
       debugPrint('Device discovery failed: $error');
       debugPrintStack(stackTrace: stackTrace);
@@ -210,15 +199,39 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       setState(() {
         _status =
-            'Automatic discovery unavailable. You can still scan a QR code.';
+            'Automatic discovery is unavailable. Use the QR code instead.';
       });
     }
   }
 
-  bool _disposed = false;
+  void _handleDiscoveredDevice(Map<String, dynamic> device) {
+    if (!mounted || _disposed) return;
+
+    final ip = device['ip'];
+    final httpPort = device['httpPort'];
+
+    if (ip is! String || httpPort is! int) return;
+
+    final key = '$ip:$httpPort';
+
+    setState(() {
+      if (device['unavailable'] == true) {
+        _nearbyDevices.remove(key);
+      } else {
+        // Never list this phone as a nearby peer.
+        if (ip == _localIp &&
+            httpPort == (_localPort ?? _service.port)) {
+          return;
+        }
+
+        _nearbyDevices[key] = Map<String, dynamic>.from(device);
+      }
+    });
+  }
 
   void _startReceiverMonitor() {
     _receiverMonitor?.cancel();
+
     _receiverMonitor = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _checkReceiverStatus(),
@@ -232,6 +245,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
   Future<void> _checkReceiverStatus() async {
     if (!mounted ||
+        _disposed ||
         !_receiverStarted ||
         _checkingReceiver ||
         _loading) {
@@ -257,11 +271,13 @@ class _ConnectScreenState extends State<ConnectScreen>
         });
 
         _stopReceiverMonitor();
+        await _stopDiscovery();
         return;
       }
 
       final currentIp = await _getLocalIp();
-      if (!mounted) return;
+
+      if (!mounted || _disposed) return;
 
       if (currentIp == null) {
         setState(() {
@@ -274,7 +290,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       if (currentIp != _localIp) {
         setState(() {
           _localIp = currentIp;
-          _status = 'Network changed. Show the updated QR code.';
+          _status = 'Network changed. Check the updated QR code.';
           _connected = false;
           _peerIp = null;
           _peerUrl = null;
@@ -304,10 +320,11 @@ class _ConnectScreenState extends State<ConnectScreen>
       final token = _localToken;
       final tcpPort = _service.tcpPort;
 
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
 
       if (ip == null || token == null || tcpPort == null) {
         await _service.stopReceiver();
+
         if (!mounted) return;
 
         setState(() {
@@ -317,9 +334,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _status = 'Network or TCP receiver is not ready.';
         });
 
-        _message(
-          'Check Wi-Fi or hotspot, then prepare the receiver again.',
-        );
+        _message('Check Wi-Fi or hotspot and try again.');
         return;
       }
 
@@ -331,6 +346,14 @@ class _ConnectScreenState extends State<ConnectScreen>
       });
 
       _startReceiverMonitor();
+
+      // Restart discovery so this phone advertises its actual ports.
+      await _stopDiscovery();
+
+      if (!mounted || _disposed) return;
+
+      await _startDiscovery();
+
       _message('Receiver is ready.');
     } catch (error, stackTrace) {
       debugPrint('Receiver startup failed: $error');
@@ -357,12 +380,16 @@ class _ConnectScreenState extends State<ConnectScreen>
     if (_loading) return;
 
     final tcpPort = _service.tcpPort;
+    final token = _localToken;
+    final port = _service.port;
 
     if (!_receiverStarted ||
-        _localPort == null ||
-        _localToken == null ||
+        port == null ||
+        token == null ||
         tcpPort == null ||
         !_service.isServerRunning) {
+      if (!mounted) return;
+
       setState(() {
         _receiverStarted = false;
         _localPort = null;
@@ -381,16 +408,21 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     try {
       final ip = await _getLocalIp();
+
       if (!mounted) return;
 
       if (ip == null) {
-        setState(() => _status = 'Network unavailable. Check Wi-Fi.');
+        setState(() {
+          _status = 'Network unavailable. Check Wi-Fi.';
+        });
+
         _message('Could not find the phone IP address.');
         return;
       }
 
       setState(() {
         _localIp = ip;
+        _localPort = port;
         _status = 'Receiver ready. Show this QR code to connect.';
       });
 
@@ -399,21 +431,23 @@ class _ConnectScreenState extends State<ConnectScreen>
         MaterialPageRoute<void>(
           builder: (_) => QrScreen(
             ipAddress: ip,
-            port: _localPort!,
+            port: port,
             tcpPort: tcpPort,
-            token: _localToken!,
-            mode: 'STANDARD',
+            token: token,
+            mode: TransferService.standardMode,
           ),
         ),
       );
 
       if (!mounted) return;
+
       await _checkReceiverStatus();
     } catch (error, stackTrace) {
       debugPrint('Could not show QR code: $error');
       debugPrintStack(stackTrace: stackTrace);
 
       if (!mounted) return;
+
       _message('Could not display the QR code.');
     } finally {
       if (mounted) {
@@ -427,7 +461,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     await _startDiscovery();
 
-    if (!mounted) return;
+    if (!mounted || _disposed) return;
 
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
@@ -445,18 +479,20 @@ class _ConnectScreenState extends State<ConnectScreen>
     Map<String, dynamic> device,
   ) async {
     final ip = device['ip'];
-    final port = device['httpPort'];
-    final tcpPort = device['tcpPort'];
 
-    if (ip is! String || port is! int || tcpPort is! int) {
+    if (ip is! String || !_isValidIpv4(ip)) {
       _message('Invalid discovered device.');
       return;
     }
 
+    // Discovery packets intentionally do not contain session tokens.
+    // The QR code remains the secure way to establish an authenticated
+    // connection, so do not attempt to connect with an unknown token.
     _message(
-      'Automatic device discovery does not provide the secure session token. '
-      'Scan the receiver QR code to connect safely.',
+      'For a secure connection, scan the receiver phone QR code.',
     );
+
+    await _scanQr();
   }
 
   Future<void> _connectToPeer(Map<String, dynamic> result) async {
@@ -478,8 +514,9 @@ class _ConnectScreenState extends State<ConnectScreen>
         tcpPortValue > 65535 ||
         tokenValue is! String ||
         tokenValue.trim().isEmpty ||
-        (modeValue != 'STANDARD' && modeValue != '5G_PLUS')) {
-      _message('Invalid MAFX SHARE QR code. Update both phones first.');
+        (modeValue != TransferService.standardMode &&
+            modeValue != TransferService.highSpeedMode)) {
+      _message('Invalid MAFX SHARE QR code. Check both phones.');
       return;
     }
 
@@ -495,7 +532,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       _peerUrl = null;
       _peerToken = null;
       _peerTcpPort = null;
-      _transferMode = 'STANDARD';
+      _transferMode = TransferService.standardMode;
       _status = 'Authenticating connection to $ip...';
     });
 
@@ -515,14 +552,13 @@ class _ConnectScreenState extends State<ConnectScreen>
           _peerUrl = null;
           _peerToken = null;
           _peerTcpPort = null;
-          _transferMode = 'STANDARD';
+          _transferMode = TransferService.standardMode;
           _status = 'Connection authentication failed.';
         });
 
         _message(
-          'Could not authenticate the receiver. '
-          'Make sure both phones are on the same Wi-Fi or hotspot '
-          'and the receiver is running.',
+          'Could not authenticate the receiver. Make sure both phones '
+          'are on the same Wi-Fi or hotspot and the receiver is running.',
         );
         return;
       }
@@ -534,16 +570,12 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerToken = token;
         _peerTcpPort = tcpPortValue;
         _transferMode = mode;
-        _status = mode == '5G_PLUS'
-            ? 'Connected. 5G+ High-Speed Mode selected.'
-            : 'Connected successfully to $ip';
+        _status = mode == TransferService.highSpeedMode
+            ? 'Connected. High-speed mode selected.'
+            : 'Connected successfully to $ip.';
       });
 
-      _message(
-        mode == '5G_PLUS'
-            ? 'Connected. 5G+ High-Speed Mode selected.'
-            : 'Connection authenticated successfully.',
-      );
+      _message('Connection authenticated successfully.');
 
       await _chooseFiles();
     } catch (error, stackTrace) {
@@ -558,7 +590,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerUrl = null;
         _peerToken = null;
         _peerTcpPort = null;
-        _transferMode = 'STANDARD';
+        _transferMode = TransferService.standardMode;
         _status = 'Connection failed.';
       });
 
@@ -610,6 +642,8 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     try {
       await _service.stopReceiver();
+      await _stopDiscovery();
+
       if (!mounted) return;
 
       setState(() {
@@ -621,7 +655,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerUrl = null;
         _peerToken = null;
         _peerTcpPort = null;
-        _transferMode = 'STANDARD';
+        _transferMode = TransferService.standardMode;
         _status = 'Receiver stopped.';
       });
 
@@ -631,6 +665,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       debugPrintStack(stackTrace: stackTrace);
 
       if (!mounted) return;
+
       _message('Could not stop receiver.');
     } finally {
       if (mounted) {
@@ -639,16 +674,27 @@ class _ConnectScreenState extends State<ConnectScreen>
     }
   }
 
+  Future<void> _stopDiscovery() async {
+    _discoveryStarted = false;
+
+    try {
+      await _discovery.stop();
+    } catch (error) {
+      debugPrint('Could not stop discovery: $error');
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _receiverStarted) {
-      _checkReceiverStatus();
+      unawaited(_checkReceiverStatus());
     }
   }
 
   @override
   void dispose() {
     _disposed = true;
+
     _stopReceiverMonitor();
     WidgetsBinding.instance.removeObserver(this);
 
@@ -714,8 +760,9 @@ class _ConnectScreenState extends State<ConnectScreen>
             if (!_isSender) ...[
               _ActionButton(
                 icon: Icons.wifi_rounded,
-                title:
-                    _receiverStarted ? 'Receiver Ready' : 'Prepare to Receive',
+                title: _receiverStarted
+                    ? 'Receiver Ready'
+                    : 'Prepare to Receive',
                 onPressed:
                     _loading || _receiverStarted ? null : _prepareReceiver,
               ),
@@ -761,7 +808,6 @@ class _ConnectScreenState extends State<ConnectScreen>
               const SizedBox(height: 8),
               if (_nearbyDevices.isEmpty)
                 const Text(
-                  'Device discovery runs while you open the QR scanner. '
                   'If no devices appear, use the receiver QR code.',
                   style: TextStyle(color: Colors.white60, height: 1.4),
                 )
