@@ -627,7 +627,7 @@ class TransferService {
       ),
     );
 
-    request.addStream(stream);
+    await request.addStream(stream);
 
     final response = await request.close().timeout(
       _standardTransferTimeout,
