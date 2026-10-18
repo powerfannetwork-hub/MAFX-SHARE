@@ -113,6 +113,7 @@ class _SendScreenState extends State<SendScreen> {
       }
 
       if (!mounted) return;
+
       _addFiles(newFiles);
     } catch (error, stackTrace) {
       debugPrint('Media selection failed: $error');
@@ -151,6 +152,7 @@ class _SendScreenState extends State<SendScreen> {
       }
 
       if (!mounted) return;
+
       _addFiles(newFiles);
     } catch (error, stackTrace) {
       debugPrint('File selection failed: $error');
@@ -223,6 +225,16 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
 
+    final receiverUri = Uri.tryParse(widget.receiverUrl);
+
+    if (receiverUri == null ||
+        receiverUri.host.isEmpty ||
+        receiverUri.port < 1 ||
+        receiverUri.port > 65535) {
+      _showMessage('Invalid receiver address. Please reconnect.');
+      return;
+    }
+
     final filesToSend = List<_SelectedFile>.from(_selectedFiles);
     final total = filesToSend.length;
 
@@ -265,10 +277,14 @@ class _SendScreenState extends State<SendScreen> {
 
         final fileSize = await file.length();
 
-        final success = await _transferService.sendFile(
-          receiverUrl: widget.receiverUrl,
+        // FIX: Yi amfani da arguments da TransferService.sendFile
+        // yake bukata. Wannan aikin yana dawo da Future<void>,
+        // don haka ba a duba wata success boolean.
+        await _transferService.sendFile(
+          file: file,
+          receiverIp: receiverUri.host,
+          receiverPort: receiverUri.port,
           token: widget.receiverToken,
-          filePath: selected.path,
           fileName: selected.name,
           mode: widget.transferMode,
           tcpPort: _isHighSpeed ? widget.receiverTcpPort : null,
@@ -278,6 +294,7 @@ class _SendScreenState extends State<SendScreen> {
             setState(() {
               _currentFileSentBytes = sentBytes;
               _currentFileTotalBytes = totalBytes;
+
               _currentFileProgress = totalBytes > 0
                   ? (sentBytes / totalBytes).clamp(0.0, 1.0).toDouble()
                   : 0.0;
@@ -285,15 +302,12 @@ class _SendScreenState extends State<SendScreen> {
           },
         );
 
-        if (!success) {
-          throw Exception('The receiver did not confirm this file.');
-        }
-
         sent++;
         _totalBytes += fileSize;
       } catch (error, stackTrace) {
         failed++;
         _failedFiles.add(selected);
+
         debugPrint('Failed to send ${selected.name}: $error');
         debugPrintStack(stackTrace: stackTrace);
       }
@@ -303,6 +317,7 @@ class _SendScreenState extends State<SendScreen> {
       setState(() {
         _sentCount = sent;
         _progress = (index + 1) / total;
+
         _status = failed == 0
             ? 'Sent $sent of $total file(s)...'
             : 'Sent $sent; failed $failed.';
@@ -397,6 +412,7 @@ class _SendScreenState extends State<SendScreen> {
       case 'gif':
       case 'heic':
         return Icons.image_rounded;
+
       case 'mp4':
       case 'mkv':
       case 'mov':
@@ -404,6 +420,7 @@ class _SendScreenState extends State<SendScreen> {
       case 'webm':
       case '3gp':
         return Icons.video_file_rounded;
+
       case 'mp3':
       case 'm4a':
       case 'wav':
@@ -411,25 +428,33 @@ class _SendScreenState extends State<SendScreen> {
       case 'flac':
       case 'ogg':
         return Icons.audio_file_rounded;
+
       case 'apk':
         return Icons.android_rounded;
+
       case 'pdf':
         return Icons.picture_as_pdf_rounded;
+
       case 'zip':
       case 'rar':
       case '7z':
         return Icons.folder_zip_rounded;
+
       case 'doc':
       case 'docx':
         return Icons.description_rounded;
+
       case 'xls':
       case 'xlsx':
         return Icons.table_chart_rounded;
+
       case 'ppt':
       case 'pptx':
         return Icons.slideshow_rounded;
+
       case 'txt':
         return Icons.text_snippet_rounded;
+
       default:
         return Icons.insert_drive_file_rounded;
     }
@@ -475,7 +500,10 @@ class _SendScreenState extends State<SendScreen> {
                 const SizedBox(height: 5),
                 Text(
                   _formatSize(file.size),
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  style: const TextStyle(
+                    color: Colors.white60,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -570,7 +598,10 @@ class _SendScreenState extends State<SendScreen> {
           ],
           if (_sentCount > 0) ...[
             const SizedBox(height: 8),
-            Text('Successful files: $_sentCount', style: const TextStyle(color: green)),
+            Text(
+              'Successful files: $_sentCount',
+              style: const TextStyle(color: green),
+            ),
             Text(
               'Transferred: ${_formatSize(_totalBytes)}',
               style: const TextStyle(color: Colors.white70),
@@ -580,7 +611,10 @@ class _SendScreenState extends State<SendScreen> {
             const SizedBox(height: 12),
             const Text(
               'Failed files:',
-              style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 5),
             ..._failedFiles.map(
@@ -588,7 +622,10 @@ class _SendScreenState extends State<SendScreen> {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
                   '• ${file.name}',
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  style: const TextStyle(
+                    color: Colors.redAccent,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ),
@@ -673,19 +710,26 @@ class _SendScreenState extends State<SendScreen> {
                   ),
                   const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
                     decoration: BoxDecoration(
                       color: _isHighSpeed
                           ? green.withValues(alpha: 0.12)
                           : Colors.white.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _isHighSpeed ? green : Colors.white24),
+                      border: Border.all(
+                        color: _isHighSpeed ? green : Colors.white24,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          _isHighSpeed ? Icons.bolt_rounded : Icons.speed_rounded,
+                          _isHighSpeed
+                              ? Icons.bolt_rounded
+                              : Icons.speed_rounded,
                           size: 18,
                           color: _isHighSpeed ? green : Colors.white70,
                         ),
@@ -707,7 +751,10 @@ class _SendScreenState extends State<SendScreen> {
                     const SizedBox(height: 8),
                     Text(
                       'High-Speed TCP port: ${widget.receiverTcpPort}',
-                      style: const TextStyle(color: Colors.white60, fontSize: 12),
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                   const SizedBox(height: 8),
@@ -737,8 +784,14 @@ class _SendScreenState extends State<SendScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: _sending || _selectedFiles.isEmpty ? null : _sendFiles,
-                      icon: Icon(_sending ? Icons.sync_rounded : Icons.send_rounded),
+                      onPressed: _sending || _selectedFiles.isEmpty
+                          ? null
+                          : _sendFiles,
+                      icon: Icon(
+                        _sending
+                            ? Icons.sync_rounded
+                            : Icons.send_rounded,
+                      ),
                       label: Text(_sending ? 'Sending...' : 'Send Now'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: green,
@@ -767,7 +820,10 @@ class _SendScreenState extends State<SendScreen> {
                     ),
                     Text(
                       '${_selectedFiles.length} item(s)',
-                      style: const TextStyle(color: Colors.white60, fontSize: 12),
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
@@ -800,7 +856,10 @@ class _SendScreenState extends State<SendScreen> {
                               'Tap Add Files to choose photos, videos, music, '
                               'documents, or other files.',
                               textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white60, height: 1.5),
+                              style: TextStyle(
+                                color: Colors.white60,
+                                height: 1.5,
+                              ),
                             ),
                           ],
                         ),
@@ -809,7 +868,8 @@ class _SendScreenState extends State<SendScreen> {
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       itemCount: _selectedFiles.length,
-                      itemBuilder: (context, index) => _buildFileCard(_selectedFiles[index]),
+                      itemBuilder: (context, index) =>
+                          _buildFileCard(_selectedFiles[index]),
                     ),
             ),
             if (_status.isNotEmpty) _buildProgressPanel(),
