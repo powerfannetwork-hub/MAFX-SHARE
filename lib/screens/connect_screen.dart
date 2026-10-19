@@ -118,9 +118,7 @@ includeLoopback: false,
         final second = int.tryParse(parts[1]) ?? -1;
 
         if (first == 10 ||
-            (first == 172 &&
-                second >= 16 &&
-                second <= 31) ||
+            (first == 172 && second >= 16 && second <= 31) ||
             (first == 192 && second == 168)) {
           return ip;
         }
@@ -219,7 +217,10 @@ setState(() {
   _localIp = ip;
   _localPort = port;
   _showingQr = true;
+  _status = 'Ana jiran ɗayan wayar ta yi scan...';
 });
+
+_startPairingMonitor();
 
 try {
   await Navigator.push<void>(
@@ -235,8 +236,59 @@ try {
     ),
   );
 } finally {
+  _connectionPollTimer?.cancel();
+  _connectionPollTimer = null;
   _showingQr = false;
 }
+
+}
+
+void _startPairingMonitor() {
+_connectionPollTimer?.cancel();
+
+_connectionPollTimer = Timer.periodic(
+  const Duration(milliseconds: 500),
+  (_) {
+    if (!mounted || _disposed || !_service.isPaired) return;
+
+    final peer = _service.pairedPeer;
+
+    if (peer == null) return;
+
+    final ip = peer['ip'];
+    final port = peer['port'];
+    final tcpPort = peer['tcpPort'];
+    final token = peer['token'];
+    final mode = peer['mode'];
+
+    if (ip is! String ||
+        port is! int ||
+        tcpPort is! int ||
+        token is! String ||
+        mode is! String) {
+      return;
+    }
+
+    _connectionPollTimer?.cancel();
+    _connectionPollTimer = null;
+
+    setState(() {
+      _connected = true;
+      _peerIp = ip;
+      _peerUrl = 'http://$ip:$port';
+      _peerToken = token;
+      _peerTcpPort = tcpPort;
+      _transferMode = mode;
+      _status = 'Connection Successful';
+    });
+
+    _message('Connection Successful');
+
+    if (_showingQr && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  },
+);
 
 }
 
@@ -329,8 +381,52 @@ try {
     return;
   }
 
+  final localIp = await _getLocalIp();
+  final localPort = _service.port;
+  final localTcpPort = _service.tcpPort;
+  final localToken = _service.sessionToken;
+
+  if (localIp == null ||
+      localPort == null ||
+      localTcpPort == null ||
+      localToken == null) {
+    setState(() {
+      _status = 'Ba a samu bayanan haɗin wannan wayar ba.';
+    });
+
+    _message('Ba a iya kammala pairing ba. Sake gwadawa.');
+    return;
+  }
+
+  final paired = await _service.announcePairing(
+    receiverUrl: peerUrl,
+    receiverToken: token,
+    mode: mode,
+    peerIp: localIp,
+    peerPort: localPort,
+    peerTcpPort: localTcpPort,
+    peerToken: localToken,
+  );
+
+  if (!mounted || _disposed) return;
+
+  if (!paired) {
+    setState(() {
+      _connected = false;
+      _status = 'An tabbatar da QR, amma pairing bai kammala ba.';
+    });
+
+    _message(
+      'An kasa kammala pairing. Duba haɗin Wi-Fi sannan '
+      'ka sake gwadawa.',
+    );
+    return;
+  }
+
   setState(() {
     _connected = true;
+    _localIp = localIp;
+    _localPort = localPort;
     _peerIp = ip;
     _peerUrl = peerUrl;
     _peerToken = token;
@@ -340,9 +436,6 @@ try {
   });
 
   _message('Connection Successful');
-
-  // Wannan wayar yanzu tana iya aikawa zuwa wayar da aka scan.
-  // Wayar da ta nuna QR za ta iya karɓar fayiloli.
 } catch (error, stackTrace) {
   debugPrint('Peer connection failed: $error');
   debugPrintStack(stackTrace: stackTrace);
@@ -396,6 +489,11 @@ mode != TransferService.highSpeedMode)) {
 return;
 }
 
+if (_connected) {
+  _message('Ka katse haɗin kafin canza transfer mode.');
+  return;
+}
+
 setState(() {
   _transferMode = mode;
   _status = mode == TransferService.highSpeedMode
@@ -414,11 +512,12 @@ setState(() {
 });
 
 try {
+  _connectionPollTimer?.cancel();
+  _connectionPollTimer = null;
+
   await _service.stopReceiver();
 
   if (!mounted || _disposed) return;
-
-  _connectionPollTimer?.cancel();
 
   setState(() {
     _connected = false;
@@ -616,7 +715,7 @@ return Scaffold(
         SizedBox(
           height: 54,
           child: ElevatedButton.icon(
-            onPressed: _loading ? null : _chooseFiles,
+            onPressed: _loading || !_connected ? null : _chooseFiles,
             icon: const Icon(Icons.folder_open_rounded),
             label: const Text(
               'Select Files',
@@ -626,9 +725,10 @@ return Scaffold(
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  _connected ? brightGreen : Colors.white24,
+              backgroundColor: brightGreen,
               foregroundColor: Colors.black,
+              disabledBackgroundColor: Colors.white24,
+              disabledForegroundColor: Colors.white54,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
               ),
