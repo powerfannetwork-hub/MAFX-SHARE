@@ -3,305 +3,209 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-class QrScreen extends StatelessWidget {
-final String ipAddress;
-final int port;
-final int tcpPort;
-final String token;
-final String mode;
+class QrScreen extends StatefulWidget {
+  final String ipAddress;
+  final int port;
+  final int tcpPort;
+  final String token;
+  final String mode;
 
-const QrScreen({
-super.key,
-required this.ipAddress,
-required this.port,
-required this.tcpPort,
-required this.token,
-this.mode = 'STANDARD',
-});
+  const QrScreen({
+    super.key,
+    required this.ipAddress,
+    required this.port,
+    required this.tcpPort,
+    required this.token,
+    this.mode = 'STANDARD',
+  });
 
-static const Color _green = Color(0xFF00D18B);
-static const Color _background = Color(0xFF101820);
-static const Color _card = Color(0xFF192832);
-
-String get _connectionData {
-return jsonEncode({
-'app': 'MAFX_SHARE',
-'version': 1,
-'mode': mode,
-'ip': ipAddress,
-'port': port,
-'tcpPort': tcpPort,
-'token': token,
-});
+  @override
+  State<QrScreen> createState() => _QrScreenState();
 }
 
-bool get _isHighSpeed => mode == '5G_PLUS';
+class _QrScreenState extends State<QrScreen> {
+  static const Color _green = Color(0xFF008D5A);
+  static const Color _brightGreen = Color(0xFF00D18B);
+  static const Color _dark = Color(0xFF202024);
+  static const Color _card = Color(0xFF2B2B30);
 
-@override
-Widget build(BuildContext context) {
-final modeColor =
-_isHighSpeed ? Colors.lightBlueAccent : _green;
+  late bool _highSpeedEnabled;
 
-final modeLabel = _isHighSpeed
-    ? '5G+ High-Speed Mode'
-    : 'Standard Mode';
+  @override
+  void initState() {
+    super.initState();
+    _highSpeedEnabled = widget.mode == '5G_PLUS';
+  }
 
-return Scaffold(
-  backgroundColor: _background,
-  appBar: AppBar(
-    title: const Text('Connect Device'),
-    backgroundColor: _green,
-    foregroundColor: Colors.black,
-    elevation: 0,
-  ),
-  body: SafeArea(
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          const SizedBox(height: 12),
+  String get _mode =>
+      _highSpeedEnabled ? '5G_PLUS' : 'STANDARD';
 
-          const Icon(
-            Icons.devices_rounded,
-            size: 58,
-            color: _green,
-          ),
+  bool get _isHighSpeed => _highSpeedEnabled;
 
-          const SizedBox(height: 12),
+  String get _qrData {
+    final payload = <String, dynamic>{
+      'app': 'MAFX_SHARE',
+      'version': 1,
+      'ip': widget.ipAddress,
+      'port': widget.port,
+      'tcpPort': widget.tcpPort,
+      'token': widget.token,
+      'mode': _mode,
+    };
 
-          const Text(
-            'MAFX SHARE',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 27,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.2,
-            ),
-          ),
+    return jsonEncode(payload);
+  }
 
-          const SizedBox(height: 8),
+  @override
+  Widget build(BuildContext context) {
+    final modeColor =
+        _isHighSpeed ? Colors.lightBlueAccent : _brightGreen;
 
-          const Text(
-            'Scan this QR code to connect both phones.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _card,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: modeColor,
-                width: 1.5,
+    return Scaffold(
+      backgroundColor: _dark,
+      appBar: AppBar(
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
+        title: const Text('Connect'),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(22),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Column(
+                          children: [
+                            QrImageView(
+                              key: ValueKey(_qrData),
+                              data: _qrData,
+                              version: QrVersions.auto,
+                              size: 300,
+                              backgroundColor: Colors.white,
+                              errorCorrectionLevel:
+                                  QrErrorCorrectLevel.M,
+                            ),
+                            const SizedBox(height: 18),
+                            Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.wifi_tethering_rounded,
+                                  color: _green,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    widget.ipAddress,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: _green,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _isHighSpeed
+                                  ? 'High-speed connection'
+                                  : 'Standard connection',
+                              style: TextStyle(
+                                color: modeColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      const Text(
+                        'Scan this QR code with the other device',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Keep both devices connected to the same '
+                        'Wi-Fi network or hotspot.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 13,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-            child: Column(
-              children: [
-                Icon(
-                  Icons.speed_rounded,
-                  color: modeColor,
-                  size: 38,
+
+            // High-speed mode switch, matching the requested design.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 12,
+              ),
+              decoration: const BoxDecoration(
+                color: _card,
+                border: Border(
+                  top: BorderSide(color: Colors.white24),
                 ),
-
-                const SizedBox(height: 10),
-
-                Text(
-                  modeLabel,
-                  style: TextStyle(
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.rocket_launch_rounded,
                     color: modeColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                    size: 26,
                   ),
-                ),
-
-                const SizedBox(height: 6),
-
-                const Text(
-                  'Transfer mode',
-                  style: TextStyle(
-                    color: Colors.white60,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: modeColor,
-                width: 3,
-              ),
-            ),
-            child: QrImageView(
-              data: _connectionData,
-              version: QrVersions.auto,
-              size: 250,
-              backgroundColor: Colors.white,
-              eyeStyle: QrEyeStyle(
-                eyeShape: QrEyeShape.square,
-                color: _isHighSpeed
-                    ? Colors.blue
-                    : Colors.black,
-              ),
-              dataModuleStyle: QrDataModuleStyle(
-                dataModuleShape:
-                    QrDataModuleShape.square,
-                color: _isHighSpeed
-                    ? Colors.blue
-                    : Colors.black,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 22),
-
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _card,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              children: [
-                const Icon(
-                  Icons.wifi_tethering_rounded,
-                  color: _green,
-                  size: 32,
-                ),
-
-                const SizedBox(height: 10),
-
-                const Text(
-                  'Waiting for connection',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                const Text(
-                  'Phone address',
-                  style: TextStyle(
-                    color: Colors.white60,
-                    fontSize: 12,
-                  ),
-                ),
-
-                const SizedBox(height: 5),
-
-                SelectableText(
-                  '$ipAddress:$port',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                const Text(
-                  'TCP Port',
-                  style: TextStyle(
-                    color: Colors.white60,
-                    fontSize: 12,
-                  ),
-                ),
-
-                const SizedBox(height: 5),
-
-                SelectableText(
-                  '$tcpPort',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.info_outline_rounded,
-                  color: _green,
-                  size: 22,
-                ),
-
-                SizedBox(width: 10),
-
-                Expanded(
-                  child: Text(
-                    'A waya ta biyu, danna Receive domin buɗe '
-                    'scanner, sannan ka scan wannan QR code. '
-                    'Wayoyin biyu su kasance a Wi-Fi ko hotspot '
-                    'ɗaya. Bayan an haɗa su, sai a zaɓi fayiloli.',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      height: 1.6,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'High-speed Mode',
+                      style: TextStyle(
+                        color: modeColor,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 22),
-
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: OutlinedButton.icon(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.arrow_back_rounded),
-              label: const Text('Back'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _green,
-                side: const BorderSide(color: _green),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+                  Switch(
+                    value: _highSpeedEnabled,
+                    activeColor: Colors.lightBlueAccent,
+                    onChanged: (enabled) {
+                      setState(() {
+                        _highSpeedEnabled = enabled;
+                      });
+                    },
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  ),
-);
-
-}
+    );
+  }
 }
