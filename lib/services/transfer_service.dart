@@ -32,8 +32,14 @@ class TransferService {
   static const int _highSpeedChunkSize = 1024 * 1024;
 
   final MafxTransferEngine _engine = MafxTransferEngine(
-    parallelCount: 6,
-  );
+  parallelCount: 6,
+  smallChunkSize: 1024 * 1024,
+  mediumChunkSize: 4 * 1024 * 1024,
+  largeChunkSize: 8 * 1024 * 1024,
+  parallelThreshold: 1024 * 1024,
+  largeFileThreshold: 100 * 1024 * 1024,
+  veryLargeFileThreshold: 1024 * 1024 * 1024,
+);
 
   HttpServer? _server;
   MafxReceiver? _tcpReceiver;
