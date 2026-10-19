@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../services/device_discovery_service.dart';
 import '../services/transfer_service.dart';
 import 'qr_screen.dart';
 import 'scan_qr_screen.dart';
@@ -31,27 +30,20 @@ class ConnectScreen extends StatefulWidget {
 class _ConnectScreenState extends State<ConnectScreen>
     with WidgetsBindingObserver {
   final TransferService _service = TransferService.instance;
-  final DeviceDiscoveryService _discovery = DeviceDiscoveryService();
-
-  StreamSubscription<Map<String, dynamic>>? _discoverySubscription;
-  Timer? _receiverMonitor;
-
-  final Map<String, Map<String, dynamic>> _nearbyDevices = {};
 
   bool _loading = false;
   bool _receiverStarted = false;
   bool _connected = false;
-  bool _checkingReceiver = false;
-  bool _discoveryStarted = false;
   bool _disposed = false;
+  bool _openingScanner = false;
 
-  String _status = 'Ready to connect';
+  String _status = 'Ana shirya haɗin wayoyi...';
   String _transferMode = TransferService.standardMode;
 
+  String? _localIp;
   String? _peerIp;
   String? _peerUrl;
   String? _peerToken;
-  String? _localIp;
 
   int? _localPort;
   int? _peerTcpPort;
@@ -65,17 +57,13 @@ class _ConnectScreenState extends State<ConnectScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    _status = _isSender
-        ? 'Scan the receiver QR code to connect securely.'
-        : 'Prepare this phone to receive files.';
-
-    if (!_isSender) {
-      unawaited(_startDiscovery());
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeConnection();
+    });
   }
 
   void _message(String message) {
-    if (!mounted) return;
+    if (!mounted || _disposed) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -83,21 +71,6 @@ class _ConnectScreenState extends State<ConnectScreen>
         behavior: SnackBarBehavior.floating,
       ),
     );
-  }
-
-  bool _isPrivateIpv4(String ip) {
-    final parts = ip.split('.');
-    if (parts.length != 4) return false;
-
-    final octets = parts.map(int.tryParse).toList();
-    if (octets.any((value) => value == null)) return false;
-
-    final a = octets[0]!;
-    final b = octets[1]!;
-
-    return a == 10 ||
-        (a == 172 && b >= 16 && b <= 31) ||
-        (a == 192 && b == 168);
   }
 
   bool _isValidIpv4(String ip) {
@@ -116,7 +89,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         includeLoopback: false,
       );
 
-      String? fallbackIp;
+      String? fallback;
 
       for (final interface in interfaces) {
         for (final address in interface.addresses) {
@@ -129,373 +102,159 @@ class _ConnectScreenState extends State<ConnectScreen>
 
           if (ip.startsWith('169.254.')) continue;
 
-          fallbackIp ??= ip;
+          fallback ??= ip;
 
-          if (_isPrivateIpv4(ip)) return ip;
+          final parts = ip.split('.');
+
+          if (parts.length == 4) {
+            final first = int.tryParse(parts[0]) ?? -1;
+            final second = int.tryParse(parts[1]) ?? -1;
+
+            if (first == 10 ||
+                (first == 172 && second >= 16 && second <= 31) ||
+                (first == 192 && second == 168)) {
+              return ip;
+            }
+          }
         }
       }
 
-      return fallbackIp;
-    } catch (error, stackTrace) {
-      debugPrint('IP lookup failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
+      return fallback;
+    } catch (error) {
+      debugPrint('Could not get local IP: $error');
       return null;
     }
   }
 
-  Future<void> _startDiscovery() async {
-    if (_discoveryStarted || _disposed) return;
-
-    final ip = await _getLocalIp();
-
-    if (!mounted || _disposed) return;
-
-    if (ip == null) {
-      setState(() {
-        _status = 'Network unavailable. Check Wi-Fi or hotspot.';
-      });
-      return;
-    }
-
-    // Discovery service requires valid ports. On the sending phone,
-    // use harmless local port values because it is not the receiver.
-    // The receiver advertises its real HTTP and TCP ports after startup.
-    final httpPort = _service.port ?? 45872;
-    final tcpPort = _service.tcpPort ?? 45873;
-    final token = _localToken ??
-        'discovery-${DateTime.now().millisecondsSinceEpoch}';
-
-    try {
-      _discoverySubscription ??= _discovery.devices.listen(
-        _handleDiscoveredDevice,
-        onError: (Object error, StackTrace stackTrace) {
-          debugPrint('Discovery stream error: $error');
-          debugPrintStack(stackTrace: stackTrace);
-        },
-      );
-
-      await _discovery.startListening(
-        deviceName: 'MAFX-ANDROID',
-        sessionToken: token,
-        httpPort: httpPort,
-        tcpPort: tcpPort,
-      );
-
-      if (!mounted || _disposed) {
-        await _discovery.stop();
-        return;
-      }
-
-      _discoveryStarted = true;
-
-      setState(() {
-        _status = 'Searching for nearby MAFX SHARE devices...';
-      });
-    } catch (error, stackTrace) {
-      debugPrint('Device discovery failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
-
-      if (!mounted) return;
-
-      setState(() {
-        _status =
-            'Automatic discovery is unavailable. Use the QR code instead.';
-      });
-    }
-  }
-
-  void _handleDiscoveredDevice(Map<String, dynamic> device) {
-    if (!mounted || _disposed) return;
-
-    final ip = device['ip'];
-    final httpPort = device['httpPort'];
-
-    if (ip is! String || httpPort is! int) return;
-
-    final key = '$ip:$httpPort';
-
-    setState(() {
-      if (device['unavailable'] == true) {
-        _nearbyDevices.remove(key);
-      } else {
-        // Never list this phone as a nearby peer.
-        if (ip == _localIp &&
-            httpPort == (_localPort ?? _service.port)) {
-          return;
-        }
-
-        _nearbyDevices[key] = Map<String, dynamic>.from(device);
-      }
-    });
-  }
-
-  void _startReceiverMonitor() {
-    _receiverMonitor?.cancel();
-
-    _receiverMonitor = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _checkReceiverStatus(),
-    );
-  }
-
-  void _stopReceiverMonitor() {
-    _receiverMonitor?.cancel();
-    _receiverMonitor = null;
-  }
-
-  Future<void> _checkReceiverStatus() async {
-    if (!mounted ||
-        _disposed ||
-        !_receiverStarted ||
-        _checkingReceiver ||
-        _loading) {
-      return;
-    }
-
-    _checkingReceiver = true;
-
-    try {
-      if (!_service.isServerRunning) {
-        if (!mounted) return;
-
-        setState(() {
-          _receiverStarted = false;
-          _localPort = null;
-          _localIp = null;
-          _connected = false;
-          _peerIp = null;
-          _peerUrl = null;
-          _peerToken = null;
-          _peerTcpPort = null;
-          _status = 'Receiver stopped. Prepare it again.';
-        });
-
-        _stopReceiverMonitor();
-        await _stopDiscovery();
-        return;
-      }
-
-      final currentIp = await _getLocalIp();
-
-      if (!mounted || _disposed) return;
-
-      if (currentIp == null) {
-        setState(() {
-          _status = 'Network unavailable. Check Wi-Fi.';
-          _connected = false;
-        });
-        return;
-      }
-
-      if (currentIp != _localIp) {
-        setState(() {
-          _localIp = currentIp;
-          _status = 'Network changed. Check the updated QR code.';
-          _connected = false;
-          _peerIp = null;
-          _peerUrl = null;
-          _peerToken = null;
-          _peerTcpPort = null;
-        });
-      }
-    } catch (error, stackTrace) {
-      debugPrint('Receiver status check failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
-    } finally {
-      _checkingReceiver = false;
-    }
-  }
-
-  Future<void> _prepareReceiver() async {
-    if (_loading || _receiverStarted) return;
+  Future<void> _initializeConnection() async {
+    if (_loading || _disposed) return;
 
     setState(() {
       _loading = true;
-      _status = 'Preparing receiver...';
+      _status = 'Ana kunna hanyar haɗin fayiloli...';
     });
 
     try {
       final port = await _service.startReceiver();
       final ip = await _getLocalIp();
-      final token = _localToken;
-      final tcpPort = _service.tcpPort;
 
       if (!mounted || _disposed) return;
 
-      if (ip == null || token == null || tcpPort == null) {
-        await _service.stopReceiver();
-
-        if (!mounted) return;
-
+      if (ip == null ||
+          _service.sessionToken == null ||
+          _service.tcpPort == null) {
         setState(() {
-          _receiverStarted = false;
-          _localPort = null;
-          _localIp = null;
-          _status = 'Network or TCP receiver is not ready.';
+          _status =
+              'Ba a samu hanyar sadarwa ba. Kunna Wi-Fi ko hotspot.';
         });
-
-        _message('Check Wi-Fi or hotspot and try again.');
         return;
       }
 
       setState(() {
         _receiverStarted = true;
-        _localPort = port;
         _localIp = ip;
-        _status = 'Receiver ready. Waiting for the other phone.';
+        _localPort = port;
+        _status = 'An shirya haɗin. Ana jiran ɗayan wayar.';
       });
 
-      _startReceiverMonitor();
-
-      // Restart discovery so this phone advertises its actual ports.
-      await _stopDiscovery();
-
-      if (!mounted || _disposed) return;
-
-      await _startDiscovery();
-
-      _message('Receiver is ready.');
+      if (_isSender) {
+        await _showMyQr();
+      } else {
+        await _scanQr();
+      }
     } catch (error, stackTrace) {
-      debugPrint('Receiver startup failed: $error');
+      debugPrint('Connection initialization failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      if (!mounted) return;
+      if (mounted && !_disposed) {
+        setState(() {
+          _status = 'An kasa shirya haɗin. Gwada sake farawa.';
+        });
 
-      setState(() {
-        _receiverStarted = false;
-        _localPort = null;
-        _localIp = null;
-        _status = 'Could not prepare receiver.';
-      });
-
-      _message('Receiver error: $error');
+        _message('Kuskuren fara haɗin: $error');
+      }
     } finally {
-      if (mounted) {
-        setState(() => _loading = false);
+      if (mounted && !_disposed) {
+        setState(() {
+          _loading = false;
+        });
       }
     }
   }
 
   Future<void> _showMyQr() async {
-    if (_loading) return;
+    if (_disposed || !mounted) return;
 
-    final tcpPort = _service.tcpPort;
     final token = _localToken;
     final port = _service.port;
+    final tcpPort = _service.tcpPort;
+    final ip = await _getLocalIp();
 
-    if (!_receiverStarted ||
-        port == null ||
+    if (!mounted || _disposed) return;
+
+    if (!_service.isServerRunning ||
         token == null ||
+        port == null ||
         tcpPort == null ||
-        !_service.isServerRunning) {
-      if (!mounted) return;
-
+        ip == null) {
       setState(() {
-        _receiverStarted = false;
-        _localPort = null;
-        _localIp = null;
-        _status = 'Receiver is not running. Prepare it again.';
+        _status = 'Ba a shirya QR ba. Duba Wi-Fi ko hotspot.';
       });
 
-      _message('Prepare the receiver first.');
+      _message('Da fatan za a kunna haɗin wayar tukuna.');
       return;
     }
 
     setState(() {
-      _loading = true;
-      _status = 'Checking network...';
+      _localIp = ip;
+      _localPort = port;
     });
 
-    try {
-      final ip = await _getLocalIp();
-
-      if (!mounted) return;
-
-      if (ip == null) {
-        setState(() {
-          _status = 'Network unavailable. Check Wi-Fi.';
-        });
-
-        _message('Could not find the phone IP address.');
-        return;
-      }
-
-      setState(() {
-        _localIp = ip;
-        _localPort = port;
-        _status = 'Receiver ready. Show this QR code to connect.';
-      });
-
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => QrScreen(
-            ipAddress: ip,
-            port: port,
-            tcpPort: tcpPort,
-            token: token,
-            mode: TransferService.standardMode,
-          ),
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => QrScreen(
+          ipAddress: ip,
+          port: port,
+          tcpPort: tcpPort,
+          token: token,
+          mode: _transferMode,
         ),
-      );
-
-      if (!mounted) return;
-
-      await _checkReceiverStatus();
-    } catch (error, stackTrace) {
-      debugPrint('Could not show QR code: $error');
-      debugPrintStack(stackTrace: stackTrace);
-
-      if (!mounted) return;
-
-      _message('Could not display the QR code.');
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
+      ),
+    );
   }
 
   Future<void> _scanQr() async {
-    if (_loading || !_isSender) return;
+    if (_openingScanner || _disposed || !mounted) return;
 
-    await _startDiscovery();
+    _openingScanner = true;
 
-    if (!mounted || _disposed) return;
+    try {
+      final result = await Navigator.push<Map<String, dynamic>>(
+        context,
+        MaterialPageRoute<Map<String, dynamic>>(
+          builder: (_) => const ScanQrScreen(),
+        ),
+      );
 
-    final result = await Navigator.push<Map<String, dynamic>>(
-      context,
-      MaterialPageRoute<Map<String, dynamic>>(
-        builder: (_) => const ScanQrScreen(),
-      ),
-    );
+      if (!mounted || _disposed || result == null) return;
 
-    if (!mounted || result == null) return;
+      await _connectToPeer(result);
+    } catch (error, stackTrace) {
+      debugPrint('QR scanner failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
 
-    await _connectToPeer(result);
-  }
-
-  Future<void> _connectToDiscoveredDevice(
-    Map<String, dynamic> device,
-  ) async {
-    final ip = device['ip'];
-
-    if (ip is! String || !_isValidIpv4(ip)) {
-      _message('Invalid discovered device.');
-      return;
+      if (mounted && !_disposed) {
+        _message('An samu matsala wajen buɗe scanner.');
+      }
+    } finally {
+      _openingScanner = false;
     }
-
-    // Discovery packets intentionally do not contain session tokens.
-    // The QR code remains the secure way to establish an authenticated
-    // connection, so do not attempt to connect with an unknown token.
-    _message(
-      'For a secure connection, scan the receiver phone QR code.',
-    );
-
-    await _scanQr();
   }
 
-  Future<void> _connectToPeer(Map<String, dynamic> result) async {
+  Future<void> _connectToPeer(
+    Map<String, dynamic> result,
+  ) async {
     final ipValue = result['ip'];
     final portValue = result['port'];
     final tcpPortValue = result['tcpPort'];
@@ -516,7 +275,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         tokenValue.trim().isEmpty ||
         (modeValue != TransferService.standardMode &&
             modeValue != TransferService.highSpeedMode)) {
-      _message('Invalid MAFX SHARE QR code. Check both phones.');
+      _message('QR code ɗin ba na MAFX SHARE ba ne ko bai cika ba.');
       return;
     }
 
@@ -527,13 +286,8 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     setState(() {
       _loading = true;
+      _status = 'Ana tabbatar da haɗi da $ip...';
       _connected = false;
-      _peerIp = null;
-      _peerUrl = null;
-      _peerToken = null;
-      _peerTcpPort = null;
-      _transferMode = TransferService.standardMode;
-      _status = 'Authenticating connection to $ip...';
     });
 
     try {
@@ -543,22 +297,17 @@ class _ConnectScreenState extends State<ConnectScreen>
         mode: mode,
       );
 
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
 
       if (!connected) {
         setState(() {
           _connected = false;
-          _peerIp = null;
-          _peerUrl = null;
-          _peerToken = null;
-          _peerTcpPort = null;
-          _transferMode = TransferService.standardMode;
-          _status = 'Connection authentication failed.';
+          _status = 'An kasa tabbatar da haɗin.';
         });
 
         _message(
-          'Could not authenticate the receiver. Make sure both phones '
-          'are on the same Wi-Fi or hotspot and the receiver is running.',
+          'Duba cewa wayoyin suna kan Wi-Fi ko hotspot ɗaya, '
+          'kuma QR code ɗin yana aiki.',
         );
         return;
       }
@@ -570,64 +319,70 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerToken = token;
         _peerTcpPort = tcpPortValue;
         _transferMode = mode;
-        _status = mode == TransferService.highSpeedMode
-            ? 'Connected. High-speed mode selected.'
-            : 'Connected successfully to $ip.';
+        _status = 'Connection Successful';
       });
 
-      _message('Connection authenticated successfully.');
+      _message('Connection Successful');
 
-      await _chooseFiles();
+      // Both phones keep their own receiver server running.
+      // Either phone can scan the other phone's QR and send files.
     } catch (error, stackTrace) {
-      debugPrint('Connection failed: $error');
+      debugPrint('Peer connection failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
 
       setState(() {
         _connected = false;
-        _peerIp = null;
-        _peerUrl = null;
-        _peerToken = null;
-        _peerTcpPort = null;
-        _transferMode = TransferService.standardMode;
-        _status = 'Connection failed.';
+        _status = 'Haɗin ya gaza.';
       });
 
-      _message('Connection error. Please try again.');
+      _message('An kasa haɗuwa. Sake gwadawa.');
     } finally {
-      if (mounted) {
-        setState(() => _loading = false);
+      if (mounted && !_disposed) {
+        setState(() {
+          _loading = false;
+        });
       }
     }
   }
 
   Future<void> _chooseFiles() async {
-    if (!_isSender ||
-        !_connected ||
+    if (!_connected ||
+        _peerIp == null ||
         _peerUrl == null ||
         _peerToken == null) {
-      _message('Connect to the receiving phone first.');
+      _message('Ka fara haɗa wayoyin kafin zaɓar fayiloli.');
       return;
     }
-
-    final receiverUrl = _peerUrl!;
-    final receiverToken = _peerToken!;
-    final transferMode = _transferMode;
-    final receiverTcpPort = _peerTcpPort;
 
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         builder: (_) => SendScreen(
-          receiverUrl: receiverUrl,
-          receiverToken: receiverToken,
+          receiverUrl: _peerUrl!,
+          receiverToken: _peerToken!,
           category: widget.category,
-          transferMode: transferMode,
-          receiverTcpPort: receiverTcpPort,
+          transferMode: _transferMode,
+          receiverTcpPort: _peerTcpPort,
         ),
       ),
     );
+  }
+
+  Future<void> _selectTransferMode(String? mode) async {
+    if (mode == null ||
+        (mode != TransferService.standardMode &&
+            mode != TransferService.highSpeedMode)) {
+      return;
+    }
+
+    setState(() {
+      _transferMode = mode;
+      _status = mode == TransferService.highSpeedMode
+          ? 'An zaɓi 5G Mode.'
+          : 'An zaɓi Standard Mode.';
+    });
   }
 
   Future<void> _stopReceiver() async {
@@ -635,72 +390,53 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     setState(() {
       _loading = true;
-      _status = 'Stopping receiver...';
+      _status = 'Ana dakatar da haɗin...';
     });
-
-    _stopReceiverMonitor();
 
     try {
       await _service.stopReceiver();
-      await _stopDiscovery();
 
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
 
       setState(() {
         _receiverStarted = false;
         _connected = false;
-        _localPort = null;
         _localIp = null;
+        _localPort = null;
         _peerIp = null;
         _peerUrl = null;
         _peerToken = null;
         _peerTcpPort = null;
-        _transferMode = TransferService.standardMode;
-        _status = 'Receiver stopped.';
+        _status = 'An dakatar da haɗin.';
       });
 
-      _message('Receiver stopped.');
-    } catch (error, stackTrace) {
-      debugPrint('Could not stop receiver: $error');
-      debugPrintStack(stackTrace: stackTrace);
-
-      if (!mounted) return;
-
-      _message('Could not stop receiver.');
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
-  }
-
-  Future<void> _stopDiscovery() async {
-    _discoveryStarted = false;
-
-    try {
-      await _discovery.stop();
+      _message('An dakatar da haɗin.');
     } catch (error) {
-      debugPrint('Could not stop discovery: $error');
+      debugPrint('Stop receiver failed: $error');
+      _message('An kasa dakatar da haɗin.');
+    } finally {
+      if (mounted && !_disposed) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _receiverStarted) {
-      unawaited(_checkReceiverStatus());
+    if (state == AppLifecycleState.resumed &&
+        !_service.isServerRunning &&
+        !_loading &&
+        !_disposed) {
+      unawaited(_initializeConnection());
     }
   }
 
   @override
   void dispose() {
     _disposed = true;
-
-    _stopReceiverMonitor();
     WidgetsBinding.instance.removeObserver(this);
-
-    unawaited(_discoverySubscription?.cancel());
-    unawaited(_discovery.dispose());
-
     super.dispose();
   }
 
@@ -708,143 +444,66 @@ class _ConnectScreenState extends State<ConnectScreen>
   Widget build(BuildContext context) {
     const green = Color(0xFF008D5A);
     const dark = Color(0xFF202024);
+    const brightGreen = Color(0xFF00D18B);
 
     return Scaffold(
       backgroundColor: dark,
       appBar: AppBar(
         backgroundColor: green,
         foregroundColor: Colors.white,
-        title: Text(_isSender ? 'Send' : 'Receive'),
+        title: Text(_isSender ? 'MAFX SHARE — Send' : 'MAFX SHARE — Receive'),
         actions: [
-          if (!_isSender)
-            IconButton(
-              tooltip: 'Show my QR',
-              onPressed: _receiverStarted && !_loading ? _showMyQr : null,
-              icon: const Icon(Icons.qr_code_2_rounded),
-            ),
+          IconButton(
+            tooltip: 'Nuna QR code na wannan waya',
+            onPressed: _loading ? null : _showMyQr,
+            icon: const Icon(Icons.qr_code_2_rounded),
+          ),
+          IconButton(
+            tooltip: 'Scan QR code',
+            onPressed: _loading ? null : _scanQr,
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+          ),
         ],
       ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(22),
           children: [
-            const SizedBox(height: 24),
-            Icon(
-              _isSender ? Icons.send_rounded : Icons.download_rounded,
-              size: 76,
-              color: const Color(0xFF00D18B),
+            const SizedBox(height: 12),
+            const Icon(
+              Icons.devices_rounded,
+              size: 78,
+              color: brightGreen,
             ),
-            const SizedBox(height: 20),
-            Text(
-              _isSender ? 'Connect Before Sending' : 'Receive Files',
+            const SizedBox(height: 16),
+            const Text(
+              'Connect Your Devices',
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontSize: 25,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 10),
-            Text(
-              _isSender
-                  ? 'Scan the receiver QR code to connect securely.'
-                  : 'Prepare this phone, then show its QR code to the sending phone.',
+            const Text(
+              'Haɗa wayoyi biyu kafin aikawa ko karɓar fayiloli. '
+              'Wayoyin biyu za su iya aikawa da karɓa.',
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white70,
                 fontSize: 15,
                 height: 1.5,
               ),
             ),
-            const SizedBox(height: 32),
-            if (!_isSender) ...[
-              _ActionButton(
-                icon: Icons.wifi_rounded,
-                title: _receiverStarted
-                    ? 'Receiver Ready'
-                    : 'Prepare to Receive',
-                onPressed:
-                    _loading || _receiverStarted ? null : _prepareReceiver,
-              ),
-              const SizedBox(height: 14),
-              _ActionButton(
-                icon: Icons.qr_code_2_rounded,
-                title: 'Show My QR Code',
-                onPressed:
-                    _loading || !_receiverStarted ? null : _showMyQr,
-              ),
-              if (_localIp != null) ...[
-                const SizedBox(height: 12),
-                SelectableText(
-                  'Local IP: $_localIp',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              ],
-            ],
-            if (_isSender) ...[
-              _ActionButton(
-                icon: Icons.qr_code_scanner_rounded,
-                title: _loading
-                    ? 'Authenticating Connection...'
-                    : 'Scan Receiver QR Code',
-                onPressed: _loading ? null : _scanQr,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Both phones must be on the same Wi-Fi network or hotspot.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white60, height: 1.5),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Nearby devices',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (_nearbyDevices.isEmpty)
-                const Text(
-                  'If no devices appear, use the receiver QR code.',
-                  style: TextStyle(color: Colors.white60, height: 1.4),
-                )
-              else
-                ..._nearbyDevices.values.map(
-                  (device) => Card(
-                    color: Colors.white10,
-                    child: ListTile(
-                      leading: const Icon(
-                        Icons.phone_android_rounded,
-                        color: Color(0xFF00D18B),
-                      ),
-                      title: Text(
-                        device['deviceName']?.toString() ?? 'MAFX device',
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        '${device['ip']}:${device['httpPort']}',
-                        style: const TextStyle(color: Colors.white60),
-                      ),
-                      onTap: _loading
-                          ? null
-                          : () => _connectToDiscoveredDevice(device),
-                    ),
-                  ),
-                ),
-            ],
-            const SizedBox(height: 24),
+            const SizedBox(height: 26),
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.07),
+                color: Colors.white.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: _connected
-                      ? const Color(0xFF00D18B)
-                      : Colors.white12,
+                  color: _connected ? brightGreen : Colors.white12,
                 ),
               ),
               child: Column(
@@ -852,25 +511,26 @@ class _ConnectScreenState extends State<ConnectScreen>
                   Icon(
                     _connected
                         ? Icons.check_circle_rounded
-                        : Icons.info_outline_rounded,
-                    color: _connected
-                        ? const Color(0xFF00D18B)
-                        : Colors.white70,
-                    size: 34,
+                        : _loading
+                            ? Icons.sync_rounded
+                            : Icons.wifi_tethering_rounded,
+                    color: _connected ? brightGreen : Colors.white70,
+                    size: 42,
                   ),
                   const SizedBox(height: 12),
                   Text(
                     _status,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
+                    style: TextStyle(
+                      color: _connected ? brightGreen : Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
                     ),
                   ),
-                  if (_connected) ...[
+                  if (_localIp != null) ...[
                     const SizedBox(height: 8),
-                    Text(
-                      'Transfer mode: $_transferMode',
+                    SelectableText(
+                      'IP na wannan waya: $_localIp',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white70),
                     ),
@@ -878,30 +538,92 @@ class _ConnectScreenState extends State<ConnectScreen>
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'Connected device: $_peerIp',
+                      'An haɗu da: $_peerIp',
                       style: const TextStyle(color: Colors.white70),
                     ),
                   ],
                   if (_loading) ...[
                     const SizedBox(height: 16),
                     const CircularProgressIndicator(
-                      color: Color(0xFF00D18B),
+                      color: brightGreen,
                     ),
                   ],
                 ],
               ),
             ),
-            if (_receiverStarted) ...[
-              const SizedBox(height: 14),
-              TextButton.icon(
-                onPressed: _loading ? null : _stopReceiver,
-                icon: const Icon(Icons.stop_circle_outlined),
-                label: const Text('Stop Receiver'),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
+            const SizedBox(height: 24),
+            const Text(
+              'Transfer Mode',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: _transferMode,
+              dropdownColor: dark,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
               ),
-            ],
+              items: const [
+                DropdownMenuItem(
+                  value: TransferService.standardMode,
+                  child: Text('Standard Mode'),
+                ),
+                DropdownMenuItem(
+                  value: TransferService.highSpeedMode,
+                  child: Text('5G Mode'),
+                ),
+              ],
+              onChanged: _loading ? null : _selectTransferMode,
+            ),
+            const SizedBox(height: 24),
+            _ActionButton(
+              icon: Icons.qr_code_2_rounded,
+              title: 'Show My QR Code',
+              onPressed: _loading ? null : _showMyQr,
+            ),
+            const SizedBox(height: 12),
+            _ActionButton(
+              icon: Icons.qr_code_scanner_rounded,
+              title: 'Scan Other Phone QR',
+              onPressed: _loading ? null : _scanQr,
+            ),
+            const SizedBox(height: 12),
+            _ActionButton(
+              icon: Icons.folder_open_rounded,
+              title: 'Select Files to Send',
+              onPressed: _loading || !_connected ? null : _chooseFiles,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _connected
+                  ? 'An tabbatar da haɗin. Za ka iya zaɓar fayiloli ka aika.'
+                  : 'Zaɓin fayiloli zai buɗe bayan an tabbatar da haɗin.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white60,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 22),
+            TextButton.icon(
+              onPressed: _loading || !_receiverStarted
+                  ? null
+                  : _stopReceiver,
+              icon: const Icon(Icons.stop_circle_outlined),
+              label: const Text('Stop Connection Server'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+              ),
+            ),
           ],
         ),
       ),
@@ -923,7 +645,7 @@ class _ActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 58,
+      height: 56,
       child: FilledButton.icon(
         onPressed: onPressed,
         icon: Icon(icon),
@@ -931,7 +653,7 @@ class _ActionButton extends StatelessWidget {
           title,
           textAlign: TextAlign.center,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -941,7 +663,7 @@ class _ActionButton extends StatelessWidget {
           disabledBackgroundColor: Colors.white12,
           disabledForegroundColor: Colors.white38,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(15),
           ),
         ),
       ),
