@@ -101,9 +101,11 @@ class TransferService {
     required Map<String, dynamic> body,
     Duration? timeout,
   }) async {
+    final duration = timeout ?? _connectionTimeout;
+
     final request = await client
         .openUrl('POST', uri)
-        .timeout(timeout ?? _connectionTimeout);
+        .timeout(duration);
 
     request.headers
       ..set(HttpHeaders.contentTypeHeader, 'application/json')
@@ -111,9 +113,7 @@ class TransferService {
 
     request.write(jsonEncode(body));
 
-    return request.close().timeout(
-          timeout ?? _connectionTimeout,
-        );
+    return request.close().timeout(duration);
   }
 
   Future<Map<String, dynamic>> _readResponseJson(
@@ -811,12 +811,12 @@ class TransferService {
     );
 
     await request.addStream(stream).timeout(
-          _timeoutForMode(standardMode),
-        );
+      _timeoutForMode(standardMode),
+    );
 
     final response = await request.close().timeout(
-          _timeoutForMode(standardMode),
-        );
+      _timeoutForMode(standardMode),
+    );
 
     final responseText = await utf8.decoder
         .bind(response)
@@ -887,7 +887,7 @@ class TransferService {
           tcpPort,
           'tcpPort',
           'A valid TCP port is required for 5G+ mode. '
-              'Reconnect using a new QR code.',
+          'Reconnect using a new QR code.',
         );
       }
 
@@ -1000,8 +1000,8 @@ class TransferService {
 
     files.sort((a, b) {
       return b.lastModifiedSync().compareTo(
-            a.lastModifiedSync(),
-          );
+        a.lastModifiedSync(),
+      );
     });
 
     return files;
