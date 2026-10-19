@@ -5,6 +5,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 class QrScreen extends StatefulWidget {
   final String ipAddress;
+  final List<String> ipAddresses;
   final int port;
   final int tcpPort;
   final String token;
@@ -13,6 +14,7 @@ class QrScreen extends StatefulWidget {
   const QrScreen({
     super.key,
     required this.ipAddress,
+    this.ipAddresses = const [],
     required this.port,
     required this.tcpPort,
     required this.token,
@@ -42,11 +44,41 @@ class _QrScreenState extends State<QrScreen> {
 
   bool get _isHighSpeed => _highSpeedEnabled;
 
+  /// Returns the available IP addresses without duplicates.
+  ///
+  /// The original [ipAddress] is retained for compatibility
+  /// with older versions of the app.
+  List<String> get _availableIpAddresses {
+    final addresses = <String>[];
+
+    for (final address in [
+      widget.ipAddress,
+      ...widget.ipAddresses,
+    ]) {
+      final ip = address.trim();
+
+      if (ip.isNotEmpty && !addresses.contains(ip)) {
+        addresses.add(ip);
+      }
+    }
+
+    return addresses;
+  }
+
   String get _qrData {
+    final addresses = _availableIpAddresses;
+
     final payload = <String, dynamic>{
       'app': 'MAFX_SHARE',
       'version': 1,
+
+      // Backward compatibility with older app versions.
       'ip': widget.ipAddress,
+
+      // New field allows the scanning device to try
+      // multiple Wi-Fi or hotspot IP addresses.
+      'ips': addresses,
+
       'port': widget.port,
       'tcpPort': widget.tcpPort,
       'token': widget.token,
@@ -60,6 +92,8 @@ class _QrScreenState extends State<QrScreen> {
   Widget build(BuildContext context) {
     final modeColor =
         _isHighSpeed ? Colors.lightBlueAccent : _brightGreen;
+
+    final addresses = _availableIpAddresses;
 
     return Scaffold(
       backgroundColor: _dark,
@@ -120,13 +154,48 @@ class _QrScreenState extends State<QrScreen> {
                                 ),
                               ],
                             ),
+
+                            // Show the additional network addresses
+                            // when the device has more than one.
+                            if (addresses.length > 1) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Available network addresses:',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.black54,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              ...addresses.map(
+                                (address) => Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
+                                  child: Text(
+                                    address,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: _green,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+
                             const SizedBox(height: 8),
                             Text(
                               _isHighSpeed
                                   ? 'High-speed connection'
                                   : 'Standard connection',
                               style: TextStyle(
-                                color: modeColor,
+                                color: _isHighSpeed
+                                    ? Colors.lightBlueAccent
+                                    : _green,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -146,11 +215,24 @@ class _QrScreenState extends State<QrScreen> {
                       const SizedBox(height: 8),
                       const Text(
                         'Keep both devices connected to the same '
-                        'Wi-Fi network or hotspot.',
+                        'Wi-Fi network or phone hotspot.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white60,
                           fontSize: 13,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'If connection fails, check that both '
+                        'devices are on the same network and '
+                        'that the hotspot allows communication '
+                        'between connected devices.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
                           height: 1.5,
                         ),
                       ),
@@ -160,7 +242,7 @@ class _QrScreenState extends State<QrScreen> {
               ),
             ),
 
-            // High-speed mode switch, matching the requested design.
+            // High-speed mode switch.
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(
