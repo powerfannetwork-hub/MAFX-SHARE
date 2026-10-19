@@ -32,14 +32,14 @@ class TransferService {
   static const int _highSpeedChunkSize = 1024 * 1024;
 
   final MafxTransferEngine _engine = MafxTransferEngine(
-  parallelCount: 6,
-  smallChunkSize: 1024 * 1024,
-  mediumChunkSize: 4 * 1024 * 1024,
-  largeChunkSize: 8 * 1024 * 1024,
-  parallelThreshold: 1024 * 1024,
-  largeFileThreshold: 100 * 1024 * 1024,
-  veryLargeFileThreshold: 1024 * 1024 * 1024,
-);
+    parallelCount: 6,
+    smallChunkSize: 1024 * 1024,
+    mediumChunkSize: 4 * 1024 * 1024,
+    largeChunkSize: 8 * 1024 * 1024,
+    parallelThreshold: 1024 * 1024,
+    largeFileThreshold: 100 * 1024 * 1024,
+    veryLargeFileThreshold: 1024 * 1024 * 1024,
+  );
 
   HttpServer? _server;
   MafxReceiver? _tcpReceiver;
@@ -252,6 +252,7 @@ class TransferService {
     required String peerIp,
     required int peerPort,
     required int peerTcpPort,
+    required int receiverTcpPort,
     required String peerToken,
   }) async {
     if (!_isValidMode(mode) ||
@@ -261,7 +262,9 @@ class TransferService {
         peerPort < 1 ||
         peerPort > 65535 ||
         peerTcpPort < 1 ||
-        peerTcpPort > 65535) {
+        peerTcpPort > 65535 ||
+        receiverTcpPort < 1 ||
+        receiverTcpPort > 65535) {
       return false;
     }
 
@@ -300,10 +303,11 @@ class TransferService {
         _activeMode = mode;
         _isPaired = true;
 
-        // Store the QR-host phone as this phone's peer.
+        // Store the QR-host phone and its TCP port as this phone's peer.
         _pairedPeer = {
           'ip': uri.host,
           'port': uri.port,
+          'tcpPort': receiverTcpPort,
           'token': receiverToken,
           'mode': mode,
         };
