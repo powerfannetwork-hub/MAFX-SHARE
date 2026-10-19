@@ -63,7 +63,9 @@ class _ConnectScreenState extends State<ConnectScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeConnection();
+      if (mounted && !_disposed) {
+        unawaited(_initializeConnection());
+      }
     });
   }
 
@@ -77,6 +79,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       ),
     );
   }
+
+  // ------------------------------------------------------------
+  // IP ADDRESS VALIDATION
+  // ------------------------------------------------------------
 
   bool _isValidIpv4(String ip) {
     final address = InternetAddress.tryParse(ip);
@@ -99,21 +105,42 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     if (parts.length != 4) return false;
 
-    final first = int.tryParse(parts[0]) ?? -1;
-    final second = int.tryParse(parts[1]) ?? -1;
+    final octets = parts.map(int.tryParse).toList();
+
+    if (octets.any((value) => value == null)) {
+      return false;
+    }
+
+    final first = octets[0]!;
+    final second = octets[1]!;
 
     return first == 10 ||
         (first == 172 && second >= 16 && second <= 31) ||
         (first == 192 && second == 168);
   }
 
-  /// Identifies interfaces commonly used for Wi-Fi or phone hotspots.
-  ///
-  /// Cellular, VPN and loopback addresses are not advertised in QR codes.
+  // ------------------------------------------------------------
+  // NETWORK INTERFACE CLASSIFICATION
+  // ------------------------------------------------------------
+
+  bool _isClearlyMobileOrVpnInterface(String interfaceName) {
+    final name = interfaceName.toLowerCase();
+
+    return name.contains('rmnet') ||
+        name.contains('cell') ||
+        name.contains('mobile') ||
+        name.contains('tun') ||
+        name.contains('vpn') ||
+        name.contains('ppp') ||
+        name.contains('clat') ||
+        name.contains('ccmni') ||
+        name.contains('wwan');
+  }
+
   bool _isWifiOrHotspotInterface(String interfaceName) {
     final name = interfaceName.toLowerCase();
 
-    final isWifiOrHotspot = name.contains('wlan') ||
+    return name.contains('wlan') ||
         name.contains('wifi') ||
         name.contains('swlan') ||
         name.contains('softap') ||
@@ -121,19 +148,38 @@ class _ConnectScreenState extends State<ConnectScreen>
         name.contains('p2p') ||
         name.contains('bridge') ||
         name.startsWith('br');
-
-    final isMobileOrVpn = name.contains('rmnet') ||
-        name.contains('cell') ||
-        name.contains('mobile') ||
-        name.contains('tun') ||
-        name.contains('vpn') ||
-        name.contains('ppp') ||
-        name.contains('clat');
-
-    return isWifiOrHotspot && !isMobileOrVpn;
   }
 
-  /// Gets all usable private IPv4 addresses from Wi-Fi/hotspot interfaces.
+  int _interfacePriority(String interfaceName) {
+    final name = interfaceName.toLowerCase();
+
+    // Ordinary Wi-Fi interfaces are usually the best candidates.
+    if (name.contains('wlan') || name.contains('wifi')) {
+      return 300;
+    }
+
+    // Common Android hotspot interfaces.
+    if (name.contains('softap') ||
+        name.contains('swlan') ||
+        name.contains('ap0')) {
+      return 250;
+    }
+
+    // Wi-Fi Direct and bridge interfaces can also be useful.
+    if (name.contains('p2p') ||
+        name.contains('bridge') ||
+        name.startsWith('br')) {
+      return 200;
+    }
+
+    // Unknown interfaces are retained as lower-priority candidates.
+    return 100;
+  }
+
+  // ------------------------------------------------------------
+  // DISCOVER LOCAL WI-FI / HOTSPOT IP ADDRESSES
+  // ------------------------------------------------------------
+
   Future<List<String>> _getLocalIps() async {
     try {
       final interfaces = await NetworkInterface.list(
@@ -144,11 +190,22 @@ class _ConnectScreenState extends State<ConnectScreen>
       final candidates = <MapEntry<int, String>>[];
 
       for (final interface in interfaces) {
-        if (!_isWifiOrHotspotInterface(interface.name)) {
+        final interfaceName = interface.name;
+
+        // Do not advertise addresses belonging to known mobile/VPN
+        // interfaces. Unknown interface names are not rejected
+        // automatically because Android manufacturers use different
+        // names for Wi-Fi and hotspot interfaces.
+        if (_isClearlyMobileOrVpnInterface(interfaceName)) {
+          debugPrint(
+            'MAFX SHARE skipped non-Wi-Fi interface: '
+            '$interfaceName',
+          );
           continue;
         }
 
-        final name = interface.name.toLowerCase();
+        final recognizedWifi =
+            _isWifiOrHotspotInterface(interfaceName);
 
         for (final address in interface.addresses) {
           final ip = address.address;
@@ -160,28 +217,25 @@ class _ConnectScreenState extends State<ConnectScreen>
             continue;
           }
 
-          var score = 100;
+          var score = _interfacePriority(interfaceName);
 
-          // Prefer ordinary Wi-Fi and common hotspot interfaces.
-          if (name.contains('wlan') || name.contains('wifi')) {
+          if (recognizedWifi) {
             score += 100;
-          }
-
-          if (name.contains('softap') ||
-              name.contains('swlan') ||
-              name.contains('ap0')) {
-            score += 80;
           }
 
           candidates.add(MapEntry(score, ip));
 
           debugPrint(
-            'MAFX SHARE network candidate: '
-            'interface=${interface.name}, ip=$ip',
+            'MAFX SHARE IP candidate: '
+            'interface=$interfaceName, '
+            'ip=$ip, '
+            'priority=$score',
           );
         }
       }
 
+      // Put likely Wi-Fi/hotspot addresses first, while retaining
+      // other private IPv4 candidates as fallbacks.
       candidates.sort(
         (a, b) => b.key.compareTo(a.key),
       );
@@ -194,20 +248,20 @@ class _ConnectScreenState extends State<ConnectScreen>
         }
       }
 
-      debugPrint('MAFX SHARE Wi-Fi/hotspot IPs: $result');
+      debugPrint('MAFX SHARE discovered private IPv4 addresses: $result');
 
       return result;
     } catch (error, stackTrace) {
-      debugPrint('Could not get local IP addresses: $error');
+      debugPrint('Could not discover local IP addresses: $error');
       debugPrintStack(stackTrace: stackTrace);
 
       return <String>[];
     }
   }
 
-  /// Selects the local address most likely to reach the selected peer.
-  ///
-  /// The preferred match is an address on the same IPv4 /24 subnet.
+  // Select the local address that appears to share the same /24
+  // subnet as the peer. If no match is found, use the highest-ranked
+  // available local address.
   String? _getLocalIpForPeer(
     List<String> localIps,
     String peerIp,
@@ -232,28 +286,41 @@ class _ConnectScreenState extends State<ConnectScreen>
     return localIps.first;
   }
 
+  // ------------------------------------------------------------
+  // INITIALIZE CONNECTION
+  // ------------------------------------------------------------
+
   Future<void> _initializeConnection() async {
-    if (_loading || _disposed) return;
+    if (_loading || _disposed || !mounted) return;
 
     setState(() {
       _loading = true;
+      _connected = false;
       _status = 'Preparing file transfer connection...';
     });
 
     try {
-      final port = await _service.startReceiver();
+      await _service.startReceiver();
+
+      final port = _service.port;
+      final tcpPort = _service.tcpPort;
+      final token = _service.sessionToken;
       final ips = await _getLocalIps();
 
       if (!mounted || _disposed) return;
 
-      if (ips.isEmpty ||
-          _service.sessionToken == null ||
-          _service.tcpPort == null) {
+      if (port == null ||
+          tcpPort == null ||
+          token == null ||
+          ips.isEmpty) {
         setState(() {
-          _localIps = <String>[];
-          _status =
-              'No Wi-Fi or hotspot IPv4 address found. Enable Wi-Fi '
-              'or a phone hotspot, then try again.';
+          _localIps = ips;
+          _localIp = ips.isNotEmpty ? ips.first : null;
+          _localPort = port;
+          _status = ips.isEmpty
+              ? 'No usable private IPv4 address found. '
+                  'Enable Wi-Fi or a phone hotspot, then try again.'
+              : 'The receiver could not be prepared. Please try again.';
         });
 
         return;
@@ -277,8 +344,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       if (mounted && !_disposed) {
         setState(() {
-          _status =
-              'Could not prepare the connection. Please try again.';
+          _status = 'Could not prepare the connection. Please try again.';
         });
 
         _message('Connection startup failed: $error');
@@ -291,6 +357,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
     }
   }
+
+  // ------------------------------------------------------------
+  // SHOW QR CODE ON SENDER DEVICE
+  // ------------------------------------------------------------
 
   Future<void> _showMyQr() async {
     if (_disposed || !mounted || _showingQr) return;
@@ -352,6 +422,10 @@ class _ConnectScreenState extends State<ConnectScreen>
     }
   }
 
+  // ------------------------------------------------------------
+  // WATCH FOR PAIRING ON THE QR-HOSTING DEVICE
+  // ------------------------------------------------------------
+
   void _startPairingMonitor() {
     _connectionPollTimer?.cancel();
 
@@ -403,6 +477,10 @@ class _ConnectScreenState extends State<ConnectScreen>
     );
   }
 
+  // ------------------------------------------------------------
+  // SCAN QR CODE ON RECEIVING DEVICE
+  // ------------------------------------------------------------
+
   Future<void> _scanQr() async {
     if (_openingScanner || _disposed || !mounted) return;
 
@@ -430,6 +508,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       _openingScanner = false;
     }
   }
+
+  // ------------------------------------------------------------
+  // VERIFY QR AND CONNECT TO PEER
+  // ------------------------------------------------------------
 
   Future<void> _connectToPeer(
     Map<String, dynamic> result,
@@ -464,7 +546,8 @@ class _ConnectScreenState extends State<ConnectScreen>
     final token = tokenValue.trim();
     final mode = modeValue as String;
 
-    // Support both new QR codes with "ips" and old QR codes with "ip".
+    // Accept both newer QR codes containing "ips" and older QR codes
+    // containing only "ip".
     final peerIps = <String>[];
 
     final rawIps = result['ips'];
@@ -509,7 +592,8 @@ class _ConnectScreenState extends State<ConnectScreen>
       String? connectedIp;
       String? connectedPeerUrl;
 
-      // Try each advertised IP until one responds successfully.
+      // Try every advertised IP until the HTTP receiver responds
+      // and validates the session token and transfer mode.
       for (final candidateIp in peerIps) {
         if (!mounted || _disposed) return;
 
@@ -519,9 +603,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _status = 'Trying connection to $candidateIp...';
         });
 
-        debugPrint(
-          'MAFX SHARE trying peer address: $candidateUrl',
-        );
+        debugPrint('MAFX SHARE trying peer address: $candidateUrl');
 
         final connected = await _service.connectToReceiver(
           receiverUrl: candidateUrl,
@@ -552,8 +634,14 @@ class _ConnectScreenState extends State<ConnectScreen>
         return;
       }
 
+      // Find this phone's address for the return pairing connection.
       final ips = await _getLocalIps();
-      final localIp = _getLocalIpForPeer(ips, connectedIp);
+
+      final localIp = _getLocalIpForPeer(
+        ips,
+        connectedIp,
+      );
+
       final localPort = _service.port;
       final localTcpPort = _service.tcpPort;
       final localToken = _service.sessionToken;
@@ -635,6 +723,10 @@ class _ConnectScreenState extends State<ConnectScreen>
     }
   }
 
+  // ------------------------------------------------------------
+  // OPEN FILE SENDER
+  // ------------------------------------------------------------
+
   Future<void> _chooseFiles() async {
     if (!_connected ||
         _peerIp == null ||
@@ -658,8 +750,12 @@ class _ConnectScreenState extends State<ConnectScreen>
     );
   }
 
+  // ------------------------------------------------------------
+  // DISCONNECT
+  // ------------------------------------------------------------
+
   Future<void> _stopReceiver() async {
-    if (_loading) return;
+    if (_loading || _disposed) return;
 
     setState(() {
       _loading = true;
@@ -683,6 +779,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerUrl = null;
         _peerToken = null;
         _peerTcpPort = null;
+        _transferMode = TransferService.standardMode;
         _status = 'Connection stopped.';
       });
 
@@ -691,7 +788,9 @@ class _ConnectScreenState extends State<ConnectScreen>
       debugPrint('Stop receiver failed: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      _message('Could not stop the connection.');
+      if (mounted && !_disposed) {
+        _message('Could not stop the connection.');
+      }
     } finally {
       if (mounted && !_disposed) {
         setState(() {
@@ -700,6 +799,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
     }
   }
+
+  // ------------------------------------------------------------
+  // APP LIFECYCLE
+  // ------------------------------------------------------------
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -714,12 +817,18 @@ class _ConnectScreenState extends State<ConnectScreen>
   @override
   void dispose() {
     _disposed = true;
+
     _connectionPollTimer?.cancel();
+    _connectionPollTimer = null;
 
     WidgetsBinding.instance.removeObserver(this);
 
     super.dispose();
   }
+
+  // ------------------------------------------------------------
+  // USER INTERFACE
+  // ------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -820,7 +929,7 @@ class _ConnectScreenState extends State<ConnectScreen>
                     ),
                     const SizedBox(height: 4),
                     ..._localIps.map(
-                      (ip) => Text(
+                      (ip) => SelectableText(
                         ip,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
@@ -873,7 +982,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                   label: const Text('Disconnect'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.redAccent,
-                    side: const BorderSide(color: Colors.redAccent),
+                    side: const BorderSide(
+                      color: Colors.redAccent,
+                    ),
                   ),
                 ),
               ),
@@ -894,7 +1005,9 @@ class _ConnectScreenState extends State<ConnectScreen>
                 label: const Text('Try Again'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: brightGreen,
-                  side: const BorderSide(color: brightGreen),
+                  side: const BorderSide(
+                    color: brightGreen,
+                  ),
                 ),
               ),
             ],
