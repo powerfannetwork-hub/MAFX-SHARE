@@ -73,12 +73,13 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     if (value is int) return value;
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value);
+
     return null;
   }
 
   Map<String, dynamic>? _decodeQr(String rawValue) {
     try {
-      final decoded = jsonDecode(rawValue);
+      final dynamic decoded = jsonDecode(rawValue);
 
       if (decoded is! Map) {
         _errorMessage =
@@ -95,8 +96,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
       final ip = data['ip']?.toString().trim() ?? '';
       final token = data['token']?.toString().trim() ?? '';
-      final mode = data['mode']?.toString() ??
-          TransferService.standardMode;
+
+      final mode =
+          data['mode']?.toString() ?? TransferService.standardMode;
 
       final port = _parseInt(data['port']);
       final tcpPort = _parseInt(data['tcpPort']);
@@ -147,6 +149,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     } catch (error, stackTrace) {
       debugPrint('QR parsing error: $error');
       debugPrintStack(stackTrace: stackTrace);
+
       _errorMessage = 'The QR code contains invalid connection data.';
       return null;
     }
@@ -204,71 +207,14 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
           await _controller.start();
         } catch (startError) {
           debugPrint('Failed to restart scanner: $startError');
+          _showMessage(
+            'Unable to restart the camera. Check camera permissions.',
+          );
         }
       }
 
       return;
     }
-  }
-
-  Widget _buildCameraError(
-    BuildContext context,
-    MobileScannerException error,
-  ) {
-    return Container(
-      color: const Color(0xFF303038),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(
-            Icons.camera_alt_outlined,
-            color: Colors.redAccent,
-            size: 52,
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Camera unavailable',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _cameraErrorMessage(error),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white70,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () async {
-              try {
-                await _controller.start();
-              } catch (startError) {
-                debugPrint('Camera restart error: $startError');
-                _showMessage(
-                  'Unable to start the camera. Check camera permissions.',
-                );
-              }
-            },
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Try Again'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _cameraErrorMessage(MobileScannerException error) {
-    return error.toString().isNotEmpty
-        ? error.toString()
-        : 'Allow camera access in your device settings and try again.';
   }
 
   @override
@@ -286,9 +232,8 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
             icon: const Icon(Icons.cameraswitch_rounded),
           ),
           IconButton(
-            tooltip: _flashEnabled
-                ? 'Turn flashlight off'
-                : 'Turn flashlight on',
+            tooltip:
+                _flashEnabled ? 'Turn flashlight off' : 'Turn flashlight on',
             onPressed: _toggleFlash,
             icon: Icon(
               _flashEnabled
@@ -343,7 +288,6 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                       MobileScanner(
                         controller: _controller,
                         onDetect: _handleDetection,
-                        errorBuilder: _buildCameraError,
                       ),
                       IgnorePointer(
                         child: Center(
