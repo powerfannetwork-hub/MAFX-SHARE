@@ -44,7 +44,17 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         _flashEnabled = !_flashEnabled;
       });
     } catch (error) {
+      debugPrint('Flashlight error: $error');
       _showMessage('Unable to change the flashlight setting.');
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    try {
+      await _controller.switchCamera();
+    } catch (error) {
+      debugPrint('Camera switch error: $error');
+      _showMessage('Unable to switch camera.');
     }
   }
 
@@ -59,19 +69,26 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     );
   }
 
+  int? _parseInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
   Map<String, dynamic>? _decodeQr(String rawValue) {
     try {
       final decoded = jsonDecode(rawValue);
 
       if (decoded is! Map) {
-        _errorMessage = 'Invalid QR code. Scan a MAFX SHARE QR code.';
+        _errorMessage =
+            'Invalid QR code. Please scan a MAFX SHARE QR code.';
         return null;
       }
 
       final data = Map<String, dynamic>.from(decoded);
 
-      final appName = data['app']?.toString();
-      if (appName != 'MAFX_SHARE') {
+      if (data['app']?.toString() != 'MAFX_SHARE') {
         _errorMessage = 'This QR code does not belong to MAFX SHARE.';
         return null;
       }
@@ -85,12 +102,14 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       final tcpPort = _parseInt(data['tcpPort']);
 
       if (ip.isEmpty) {
-        _errorMessage = 'The QR code does not contain a receiver IP address.';
+        _errorMessage =
+            'The QR code does not contain a receiver IP address.';
         return null;
       }
 
       if (token.isEmpty) {
-        _errorMessage = 'The QR code does not contain a connection token.';
+        _errorMessage =
+            'The QR code does not contain a connection token.';
         return null;
       }
 
@@ -121,25 +140,20 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         'token': token,
         'mode': mode,
       };
-    } on FormatException {
+    } on FormatException catch (error) {
+      debugPrint('QR format error: $error');
       _errorMessage = 'Unable to read this QR code. Please try again.';
       return null;
-    } catch (error) {
+    } catch (error, stackTrace) {
       debugPrint('QR parsing error: $error');
+      debugPrintStack(stackTrace: stackTrace);
       _errorMessage = 'The QR code contains invalid connection data.';
       return null;
     }
   }
 
-  int? _parseInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    if (value is String) return int.tryParse(value);
-    return null;
-  }
-
   Future<void> _handleDetection(BarcodeCapture capture) async {
-    if (_processing) return;
+    if (_processing || !mounted) return;
 
     for (final barcode in capture.barcodes) {
       final rawValue = barcode.rawValue;
@@ -158,18 +172,13 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       if (data == null) {
         if (!mounted) return;
 
+        final message = _errorMessage ?? 'Invalid QR code.';
+
         setState(() {
           _processing = false;
         });
 
-        await Future<void>.delayed(
-          const Duration(milliseconds: 250),
-        );
-
-        if (mounted && _errorMessage != null) {
-          _showMessage(_errorMessage!);
-        }
-
+        _showMessage(message);
         return;
       }
 
@@ -187,7 +196,8 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
         setState(() {
           _processing = false;
-          _errorMessage = 'Unable to process the QR code. Please try again.';
+          _errorMessage =
+              'Unable to process the QR code. Please try again.';
         });
 
         try {
@@ -201,34 +211,90 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     }
   }
 
+  Widget _buildCameraError(
+    BuildContext context,
+    MobileScannerException error,
+  ) {
+    return Container(
+      color: const Color(0xFF303038),
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.camera_alt_outlined,
+            color: Colors.redAccent,
+            size: 52,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Camera unavailable',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _cameraErrorMessage(error),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white70,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () async {
+              try {
+                await _controller.start();
+              } catch (startError) {
+                debugPrint('Camera restart error: $startError');
+                _showMessage(
+                  'Unable to start the camera. Check camera permissions.',
+                );
+              }
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try Again'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _cameraErrorMessage(MobileScannerException error) {
+    return error.toString().isNotEmpty
+        ? error.toString()
+        : 'Allow camera access in your device settings and try again.';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _background,
       appBar: AppBar(
-        title: const Text('Scan QR Code'),
+        title: const Text('Scan MAFX QR'),
         backgroundColor: _green,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-            tooltip: _flashEnabled ? 'Turn flashlight off' : 'Turn flashlight on',
+            tooltip: 'Switch camera',
+            onPressed: _switchCamera,
+            icon: const Icon(Icons.cameraswitch_rounded),
+          ),
+          IconButton(
+            tooltip: _flashEnabled
+                ? 'Turn flashlight off'
+                : 'Turn flashlight on',
             onPressed: _toggleFlash,
             icon: Icon(
               _flashEnabled
                   ? Icons.flash_on_rounded
                   : Icons.flash_off_rounded,
             ),
-          ),
-          IconButton(
-            tooltip: 'Switch camera',
-            onPressed: () async {
-              try {
-                await _controller.switchCamera();
-              } catch (error) {
-                _showMessage('Unable to switch camera.');
-              }
-            },
-            icon: const Icon(Icons.cameraswitch_rounded),
           ),
         ],
       ),
@@ -256,7 +322,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Point your camera at the QR code displayed on the sending device.',
+                    'Point your camera at the QR code displayed on the other device.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white70,
@@ -277,56 +343,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                       MobileScanner(
                         controller: _controller,
                         onDetect: _handleDetection,
-                        errorBuilder: (context, error) {
-                          return Container(
-                            color: const Color(0xFF303038),
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.camera_alt_outlined,
-                                  color: Colors.redAccent,
-                                  size: 52,
-                                ),
-                                const SizedBox(height: 16),
-                                const Text(
-                                  'Camera unavailable',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  error.errorDetails?.message ??
-                                      'Allow camera access in your device settings and try again.',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    height: 1.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                FilledButton.icon(
-                                  onPressed: () async {
-                                    try {
-                                      await _controller.start();
-                                    } catch (startError) {
-                                      _showMessage(
-                                        'Unable to start the camera. Check camera permissions.',
-                                      );
-                                    }
-                                  },
-                                  icon: const Icon(Icons.refresh_rounded),
-                                  label: const Text('Try Again'),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                        errorBuilder: _buildCameraError,
                       ),
                       IgnorePointer(
                         child: Center(
@@ -350,11 +367,15 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                CircularProgressIndicator(color: _accent),
+                                CircularProgressIndicator(
+                                  color: _accent,
+                                ),
                                 SizedBox(height: 16),
                                 Text(
                                   'Processing QR code...',
-                                  style: TextStyle(color: Colors.white),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ],
                             ),
@@ -390,7 +411,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                   SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Keep both devices connected to the same local Wi-Fi network or hotspot. The sender must keep the transfer screen open.',
+                      'Keep both devices connected to the same local Wi-Fi network or hotspot. The sending device must keep the transfer screen open.',
                       style: TextStyle(
                         color: Colors.white70,
                         height: 1.5,
