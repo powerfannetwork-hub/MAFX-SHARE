@@ -57,6 +57,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   @override
   void initState() {
     super.initState();
+
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -84,6 +85,25 @@ class _ConnectScreenState extends State<ConnectScreen>
         !address.isMulticast;
   }
 
+  bool _isPrivateIpv4(String ip) {
+    final address = InternetAddress.tryParse(ip);
+
+    if (address == null ||
+        address.type != InternetAddressType.IPv4) {
+      return false;
+    }
+
+    final parts = ip.split('.');
+    if (parts.length != 4) return false;
+
+    final first = int.tryParse(parts[0]) ?? -1;
+    final second = int.tryParse(parts[1]) ?? -1;
+
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
+  }
+
   Future<String?> _getLocalIp() async {
     try {
       final interfaces = await NetworkInterface.list(
@@ -91,39 +111,65 @@ class _ConnectScreenState extends State<ConnectScreen>
         includeLoopback: false,
       );
 
-      String? fallback;
+      final candidates = <MapEntry<int, String>>[];
 
       for (final interface in interfaces) {
+        final name = interface.name.toLowerCase();
+
+        final isWifi = name.contains('wlan') ||
+            name.contains('wifi') ||
+            name.contains('swlan') ||
+            name.contains('softap') ||
+            name.contains('ap0') ||
+            name.contains('p2p');
+
+        final isEthernet = name.contains('eth');
+
+        final isMobileOrVpn = name.contains('rmnet') ||
+            name.contains('cell') ||
+            name.contains('mobile') ||
+            name.contains('tun') ||
+            name.contains('vpn') ||
+            name.contains('ppp');
+
         for (final address in interface.addresses) {
+          final ip = address.address;
+
           if (address.isLoopback ||
-              address.type != InternetAddressType.IPv4) {
+              address.type != InternetAddressType.IPv4 ||
+              ip.startsWith('169.254.') ||
+              !_isPrivateIpv4(ip)) {
             continue;
           }
 
-          final ip = address.address;
+          var score = 100;
 
-          if (ip.startsWith('169.254.')) continue;
+          if (isWifi) score += 1000;
+          if (isEthernet) score += 300;
+          if (isMobileOrVpn) score -= 500;
 
-          fallback ??= ip;
-
-          final parts = ip.split('.');
-
-          if (parts.length == 4) {
-            final first = int.tryParse(parts[0]) ?? -1;
-            final second = int.tryParse(parts[1]) ?? -1;
-
-            if (first == 10 ||
-                (first == 172 && second >= 16 && second <= 31) ||
-                (first == 192 && second == 168)) {
-              return ip;
-            }
-          }
+          candidates.add(MapEntry(score, ip));
         }
       }
 
-      return fallback;
-    } catch (error) {
+      if (candidates.isEmpty) {
+        debugPrint('No private IPv4 address found.');
+        return null;
+      }
+
+      candidates.sort(
+        (a, b) => b.key.compareTo(a.key),
+      );
+
+      final selectedIp = candidates.first.value;
+
+      debugPrint('Selected local IP: $selectedIp');
+      debugPrint('Available local IP candidates: $candidates');
+
+      return selectedIp;
+    } catch (error, stackTrace) {
       debugPrint('Could not get local IP: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return null;
     }
   }
@@ -242,7 +288,9 @@ class _ConnectScreenState extends State<ConnectScreen>
     _connectionPollTimer = Timer.periodic(
       const Duration(milliseconds: 500),
       (_) {
-        if (!mounted || _disposed || !_service.isPaired) return;
+        if (!mounted || _disposed || !_service.isPaired) {
+          return;
+        }
 
         final peer = _service.pairedPeer;
 
@@ -259,6 +307,7 @@ class _ConnectScreenState extends State<ConnectScreen>
             tcpPort is! int ||
             token is! String ||
             mode is! String) {
+          debugPrint('Pairing data is incomplete: $peer');
           return;
         }
 
@@ -399,6 +448,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         peerPort: localPort,
         peerTcpPort: localTcpPort,
         peerToken: localToken,
+        receiverTcpPort: tcpPortValue,
       );
 
       if (!mounted || _disposed) return;
@@ -500,8 +550,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       });
 
       _message('Connection stopped.');
-    } catch (error) {
+    } catch (error, stackTrace) {
       debugPrint('Stop receiver failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
       _message('Could not stop the connection.');
     } finally {
       if (mounted && !_disposed) {
