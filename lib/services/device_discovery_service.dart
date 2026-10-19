@@ -24,7 +24,6 @@ class DeviceDiscoveryService {
   bool _disposed = false;
 
   String? _deviceName;
-  String? _sessionToken;
   int? _httpPort;
   int? _tcpPort;
 
@@ -72,7 +71,6 @@ class DeviceDiscoveryService {
     _validatePort(tcpPort, 'tcpPort');
 
     _deviceName = name;
-    _sessionToken = token;
     _httpPort = httpPort;
     _tcpPort = tcpPort;
 
@@ -133,7 +131,6 @@ class DeviceDiscoveryService {
       socket?.close();
 
       _deviceName = null;
-      _sessionToken = null;
       _httpPort = null;
       _tcpPort = null;
 
@@ -299,7 +296,6 @@ class DeviceDiscoveryService {
     socket?.close();
 
     _deviceName = null;
-    _sessionToken = null;
     _httpPort = null;
     _tcpPort = null;
 
