@@ -68,12 +68,6 @@ class TransferService {
     return mode == standardMode || mode == highSpeedMode;
   }
 
-  Duration _timeoutForMode(String mode) {
-    return mode == highSpeedMode
-        ? _highSpeedTransferTimeout
-        : _standardTransferTimeout;
-  }
-
   int _chunkSizeForMode(String mode) {
     return mode == highSpeedMode
         ? _highSpeedChunkSize
