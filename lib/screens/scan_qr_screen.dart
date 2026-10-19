@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -72,11 +73,45 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
   int? _parseInt(dynamic value) {
     if (value is int) return value;
     if (value is num) return value.toInt();
-    if (value is String) return int.tryParse(value);
+    if (value is String) return int.tryParse(value.trim());
 
     return null;
   }
 
+  bool _isValidIpv4(String ip) {
+    final address = InternetAddress.tryParse(ip);
+
+    return address != null &&
+        address.type == InternetAddressType.IPv4 &&
+        !address.isLoopback &&
+        !address.isMulticast;
+  }
+
+  bool _isPrivateIpv4(String ip) {
+    final address = InternetAddress.tryParse(ip);
+
+    if (address == null ||
+        address.type != InternetAddressType.IPv4) {
+      return false;
+    }
+
+    final parts = ip.split('.');
+
+    if (parts.length != 4) return false;
+
+    final first = int.tryParse(parts[0]) ?? -1;
+    final second = int.tryParse(parts[1]) ?? -1;
+
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
+  }
+
+  /// Reads the QR code and returns normalized connection information.
+  ///
+  /// Supports both:
+  /// - Older QR codes containing only "ip".
+  /// - Newer QR codes containing "ip" and a list of "ips".
   Map<String, dynamic>? _decodeQr(String rawValue) {
     try {
       final dynamic decoded = jsonDecode(rawValue);
@@ -90,11 +125,20 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       final data = Map<String, dynamic>.from(decoded);
 
       if (data['app']?.toString() != 'MAFX_SHARE') {
-        _errorMessage = 'This QR code does not belong to MAFX SHARE.';
+        _errorMessage =
+            'This QR code does not belong to MAFX SHARE.';
         return null;
       }
 
-      final ip = data['ip']?.toString().trim() ?? '';
+      final version = _parseInt(data['version']) ?? 1;
+
+      if (version != 1) {
+        _errorMessage =
+            'This QR code version is not supported by this app.';
+        return null;
+      }
+
+      final originalIp = data['ip']?.toString().trim() ?? '';
       final token = data['token']?.toString().trim() ?? '';
 
       final mode =
@@ -103,9 +147,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       final port = _parseInt(data['port']);
       final tcpPort = _parseInt(data['tcpPort']);
 
-      if (ip.isEmpty) {
+      if (originalIp.isEmpty || !_isValidIpv4(originalIp)) {
         _errorMessage =
-            'The QR code does not contain a receiver IP address.';
+            'The QR code does not contain a valid receiver IP address.';
         return null;
       }
 
@@ -116,27 +160,65 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       }
 
       if (port == null || port < 1 || port > 65535) {
-        _errorMessage = 'The QR code contains an invalid receiver port.';
+        _errorMessage =
+            'The QR code contains an invalid receiver port.';
         return null;
       }
 
       if (mode != TransferService.standardMode &&
           mode != TransferService.highSpeedMode) {
-        _errorMessage = 'The QR code contains an unsupported transfer mode.';
+        _errorMessage =
+            'The QR code contains an unsupported transfer mode.';
         return null;
       }
 
       if (mode == TransferService.highSpeedMode &&
-          (tcpPort == null || tcpPort < 1 || tcpPort > 65535)) {
+          (tcpPort == null ||
+              tcpPort < 1 ||
+              tcpPort > 65535)) {
         _errorMessage =
             'The QR code is missing a valid high-speed TCP port.';
         return null;
       }
 
+      // Collect addresses from the new "ips" field.
+      final addresses = <String>[];
+
+      final rawAddresses = data['ips'];
+
+      if (rawAddresses is List) {
+        for (final value in rawAddresses) {
+          if (value is! String) continue;
+
+          final candidate = value.trim();
+
+          if (_isValidIpv4(candidate) &&
+              _isPrivateIpv4(candidate) &&
+              !addresses.contains(candidate)) {
+            addresses.add(candidate);
+          }
+        }
+      }
+
+      // Preserve compatibility with older QR codes.
+      // Also include "ip" if it wasn't in the list.
+      if (_isValidIpv4(originalIp) &&
+          _isPrivateIpv4(originalIp) &&
+          !addresses.contains(originalIp)) {
+        addresses.insert(0, originalIp);
+      }
+
+      if (addresses.isEmpty) {
+        _errorMessage =
+            'No private Wi-Fi or hotspot IP address was found in this QR code.';
+        return null;
+      }
+
       return <String, dynamic>{
         'app': 'MAFX_SHARE',
-        'version': _parseInt(data['version']) ?? 1,
-        'ip': ip,
+        'version': version,
+        'ip': originalIp,
+        'ips': addresses,
         'port': port,
         'tcpPort': tcpPort,
         'token': token,
@@ -144,13 +226,15 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
       };
     } on FormatException catch (error) {
       debugPrint('QR format error: $error');
-      _errorMessage = 'Unable to read this QR code. Please try again.';
+      _errorMessage =
+          'Unable to read this QR code. Please try again.';
       return null;
     } catch (error, stackTrace) {
       debugPrint('QR parsing error: $error');
       debugPrintStack(stackTrace: stackTrace);
 
-      _errorMessage = 'The QR code contains invalid connection data.';
+      _errorMessage =
+          'The QR code contains invalid connection data.';
       return null;
     }
   }
@@ -207,6 +291,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
           await _controller.start();
         } catch (startError) {
           debugPrint('Failed to restart scanner: $startError');
+
           _showMessage(
             'Unable to restart the camera. Check camera permissions.',
           );
@@ -232,8 +317,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
             icon: const Icon(Icons.cameraswitch_rounded),
           ),
           IconButton(
-            tooltip:
-                _flashEnabled ? 'Turn flashlight off' : 'Turn flashlight on',
+            tooltip: _flashEnabled
+                ? 'Turn flashlight off'
+                : 'Turn flashlight on',
             onPressed: _toggleFlash,
             icon: Icon(
               _flashEnabled
@@ -355,7 +441,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                   SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Keep both devices connected to the same local Wi-Fi network or hotspot. The sending device must keep the transfer screen open.',
+                      'Keep both devices connected to the same Wi-Fi network or phone hotspot. Some hotspots prevent connected devices from communicating with each other.',
                       style: TextStyle(
                         color: Colors.white70,
                         height: 1.5,
