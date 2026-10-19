@@ -37,7 +37,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   bool _openingScanner = false;
   bool _showingQr = false;
 
-  String _status = 'Ana shirya haɗin wayoyi...';
+  String _status = 'Preparing device connection...';
   String _transferMode = TransferService.standardMode;
 
   String? _localIp;
@@ -133,7 +133,7 @@ class _ConnectScreenState extends State<ConnectScreen>
 
     setState(() {
       _loading = true;
-      _status = 'Ana kunna hanyar haɗin fayiloli...';
+      _status = 'Preparing file transfer connection...';
     });
 
     try {
@@ -147,7 +147,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           _service.tcpPort == null) {
         setState(() {
           _status =
-              'Ba a samu hanyar sadarwa ba. Kunna Wi-Fi ko hotspot.';
+              'No network connection found. Enable Wi-Fi or a hotspot.';
         });
         return;
       }
@@ -155,7 +155,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       setState(() {
         _localIp = ip;
         _localPort = port;
-        _status = 'An shirya haɗin. Ana jiran ɗayan wayar.';
+        _status = 'Ready to connect. Waiting for the other device.';
       });
 
       if (_isSender) {
@@ -169,10 +169,10 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       if (mounted && !_disposed) {
         setState(() {
-          _status = 'An kasa shirya haɗin. Gwada sake farawa.';
+          _status = 'Could not prepare the connection. Please try again.';
         });
 
-        _message('Kuskuren fara haɗin: $error');
+        _message('Connection startup failed: $error');
       }
     } finally {
       if (mounted && !_disposed) {
@@ -199,10 +199,11 @@ class _ConnectScreenState extends State<ConnectScreen>
         tcpPort == null ||
         ip == null) {
       setState(() {
-        _status = 'Ba a shirya QR ba. Duba Wi-Fi ko hotspot.';
+        _status =
+            'QR code is not ready. Check your Wi-Fi or hotspot connection.';
       });
 
-      _message('Da fatan za a kunna haɗin wayar tukuna.');
+      _message('Please enable a network connection first.');
       return;
     }
 
@@ -210,7 +211,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       _localIp = ip;
       _localPort = port;
       _showingQr = true;
-      _status = 'Ana jiran ɗayan wayar ta yi scan...';
+      _status = 'Waiting for the other device to scan the QR code...';
     });
 
     _startPairingMonitor();
@@ -304,7 +305,7 @@ class _ConnectScreenState extends State<ConnectScreen>
       debugPrintStack(stackTrace: stackTrace);
 
       if (mounted && !_disposed) {
-        _message('An samu matsala wajen buɗe scanner.');
+        _message('Could not open the QR scanner.');
       }
     } finally {
       _openingScanner = false;
@@ -334,7 +335,9 @@ class _ConnectScreenState extends State<ConnectScreen>
         tokenValue.trim().isEmpty ||
         (modeValue != TransferService.standardMode &&
             modeValue != TransferService.highSpeedMode)) {
-      _message('QR code ɗin ba na MAFX SHARE ba ne ko bai cika ba.');
+      _message(
+        'This QR code is invalid or does not belong to MAFX SHARE.',
+      );
       return;
     }
 
@@ -346,7 +349,7 @@ class _ConnectScreenState extends State<ConnectScreen>
     setState(() {
       _loading = true;
       _connected = false;
-      _status = 'Ana tabbatar da haɗi da $ip...';
+      _status = 'Verifying connection to $ip...';
     });
 
     try {
@@ -361,12 +364,12 @@ class _ConnectScreenState extends State<ConnectScreen>
       if (!connected) {
         setState(() {
           _connected = false;
-          _status = 'An kasa tabbatar da haɗin.';
+          _status = 'Connection verification failed.';
         });
 
         _message(
-          'An kasa haɗuwa. Tabbatar wayoyin suna kan Wi-Fi '
-          'ko hotspot ɗaya, sannan ka sake scan QR.',
+          'Could not connect. Make sure both devices use the same '
+          'Wi-Fi network or hotspot, then scan the QR code again.',
         );
         return;
       }
@@ -381,10 +384,10 @@ class _ConnectScreenState extends State<ConnectScreen>
           localTcpPort == null ||
           localToken == null) {
         setState(() {
-          _status = 'Ba a samu bayanan haɗin wannan wayar ba.';
+          _status = 'Could not retrieve this device connection details.';
         });
 
-        _message('Ba a iya kammala pairing ba. Sake gwadawa.');
+        _message('Pairing could not be completed. Please try again.');
         return;
       }
 
@@ -403,12 +406,11 @@ class _ConnectScreenState extends State<ConnectScreen>
       if (!paired) {
         setState(() {
           _connected = false;
-          _status = 'An tabbatar da QR, amma pairing bai kammala ba.';
+          _status = 'QR verified, but pairing could not be completed.';
         });
 
         _message(
-          'An kasa kammala pairing. Duba haɗin Wi-Fi sannan '
-          'ka sake gwadawa.',
+          'Pairing failed. Check your Wi-Fi connection and try again.',
         );
         return;
       }
@@ -434,10 +436,10 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       setState(() {
         _connected = false;
-        _status = 'Haɗin ya gaza.';
+        _status = 'Connection failed.';
       });
 
-      _message('An kasa haɗuwa. Sake gwadawa.');
+      _message('Could not connect. Please try again.');
     } finally {
       if (mounted && !_disposed) {
         setState(() {
@@ -452,7 +454,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerIp == null ||
         _peerUrl == null ||
         _peerToken == null) {
-      _message('Ka fara haɗa wayoyin kafin zaɓar fayiloli.');
+      _message('Connect the devices before selecting files.');
       return;
     }
 
@@ -470,32 +472,12 @@ class _ConnectScreenState extends State<ConnectScreen>
     );
   }
 
-  void _selectTransferMode(String? mode) {
-    if (mode == null ||
-        (mode != TransferService.standardMode &&
-            mode != TransferService.highSpeedMode)) {
-      return;
-    }
-
-    if (_connected) {
-      _message('Ka katse haɗin kafin canza transfer mode.');
-      return;
-    }
-
-    setState(() {
-      _transferMode = mode;
-      _status = mode == TransferService.highSpeedMode
-          ? 'An zaɓi 5G Mode.'
-          : 'An zaɓi Standard Mode.';
-    });
-  }
-
   Future<void> _stopReceiver() async {
     if (_loading) return;
 
     setState(() {
       _loading = true;
-      _status = 'Ana dakatar da haɗin...';
+      _status = 'Stopping connection...';
     });
 
     try {
@@ -514,13 +496,13 @@ class _ConnectScreenState extends State<ConnectScreen>
         _peerUrl = null;
         _peerToken = null;
         _peerTcpPort = null;
-        _status = 'An dakatar da haɗin.';
+        _status = 'Connection stopped.';
       });
 
-      _message('An dakatar da haɗin.');
+      _message('Connection stopped.');
     } catch (error) {
       debugPrint('Stop receiver failed: $error');
-      _message('An kasa dakatar da haɗin.');
+      _message('Could not stop the connection.');
     } finally {
       if (mounted && !_disposed) {
         setState(() {
@@ -560,22 +542,8 @@ class _ConnectScreenState extends State<ConnectScreen>
         backgroundColor: green,
         foregroundColor: Colors.white,
         title: Text(
-          _isSender
-              ? 'MAFX SHARE — Send'
-              : 'MAFX SHARE — Receive',
+          _isSender ? 'MAFX SHARE — Send' : 'MAFX SHARE — Receive',
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Nuna QR code na wannan waya',
-            onPressed: _loading ? null : _showMyQr,
-            icon: const Icon(Icons.qr_code_2_rounded),
-          ),
-          IconButton(
-            tooltip: 'Scan QR code',
-            onPressed: _loading ? null : _scanQr,
-            icon: const Icon(Icons.qr_code_scanner_rounded),
-          ),
-        ],
       ),
       body: SafeArea(
         child: ListView(
@@ -599,9 +567,7 @@ class _ConnectScreenState extends State<ConnectScreen>
             ),
             const SizedBox(height: 10),
             const Text(
-              'Haɗa wayoyi biyu kafin aikawa ko karɓar fayiloli. '
-              'Wayoyin biyu za su iya aikawa da karɓa idan '
-              'kowannensu ya haɗu da ɗayan.',
+              'Connect both devices before sending or receiving files.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white70,
@@ -643,7 +609,7 @@ class _ConnectScreenState extends State<ConnectScreen>
                   if (_localIp != null && _localPort != null) ...[
                     const SizedBox(height: 12),
                     SelectableText(
-                      'Wannan waya: $_localIp:$_localPort',
+                      'This device: $_localIp:$_localPort',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.white60,
@@ -654,7 +620,7 @@ class _ConnectScreenState extends State<ConnectScreen>
                   if (_peerIp != null) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'An haɗa da: $_peerIp',
+                      'Connected to: $_peerIp',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 13,
@@ -664,109 +630,71 @@ class _ConnectScreenState extends State<ConnectScreen>
                 ],
               ),
             ),
-            const SizedBox(height: 22),
-            const Text(
-              'Transfer Mode',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: _transferMode,
-              dropdownColor: dark,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.06),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: TransferService.standardMode,
-                  child: Text('Standard Mode'),
-                ),
-                DropdownMenuItem(
-                  value: TransferService.highSpeedMode,
-                  child: Text('5G Mode'),
-                ),
-              ],
-              onChanged: _connected ? null : _selectTransferMode,
-            ),
             const SizedBox(height: 24),
-            SizedBox(
-              height: 54,
-              child: ElevatedButton.icon(
-                onPressed: _loading || !_connected ? null : _chooseFiles,
-                icon: const Icon(Icons.folder_open_rounded),
-                label: const Text(
-                  'Select Files',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+            if (_connected)
+              SizedBox(
+                height: 54,
+                child: ElevatedButton.icon(
+                  onPressed: _loading ? null : _chooseFiles,
+                  icon: const Icon(Icons.folder_open_rounded),
+                  label: const Text(
+                    'Select Files',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: brightGreen,
-                  foregroundColor: Colors.black,
-                  disabledBackgroundColor: Colors.white24,
-                  disabledForegroundColor: Colors.white54,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: brightGreen,
+                    foregroundColor: Colors.black,
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _loading ? null : _showMyQr,
-                icon: const Icon(Icons.qr_code_2_rounded),
-                label: const Text('Show My QR Code'),
+            if (_connected) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: _loading ? null : _stopReceiver,
+                  icon: const Icon(Icons.link_off_rounded),
+                  label: const Text('Disconnect'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.redAccent,
+                    side: const BorderSide(color: Colors.redAccent),
+                  ),
+                ),
+              ),
+            ],
+            if (!_connected && _loading) ...[
+              const SizedBox(height: 18),
+              const Center(
+                child: CircularProgressIndicator(
+                  color: brightGreen,
+                ),
+              ),
+            ],
+            if (!_connected && !_loading) ...[
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: _initializeConnection,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Try Again'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: brightGreen,
                   side: const BorderSide(color: brightGreen),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _loading ? null : _scanQr,
-                icon: const Icon(Icons.qr_code_scanner_rounded),
-                label: const Text('Scan Other Phone'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white30),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _loading ? null : _stopReceiver,
-                icon: const Icon(Icons.stop_circle_outlined),
-                label: const Text('Stop Connection'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                  side: const BorderSide(color: Colors.redAccent),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
+            ],
+            const SizedBox(height: 18),
+            const Text(
+              'Both devices must be connected to the same Wi-Fi network '
+              'or hotspot. If Android requests network permissions, '
+              'allow them and enable Wi-Fi or the hotspot in Settings.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+                height: 1.5,
               ),
             ),
           ],
