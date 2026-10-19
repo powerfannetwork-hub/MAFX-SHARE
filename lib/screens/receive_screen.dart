@@ -22,7 +22,6 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   static const Color _green = Color(0xFF008D5A);
   static const Color _accent = Color(0xFF00D18B);
   static const Color _dark = Color(0xFF202024);
-  static const Color _surface = Color(0xFF29292F);
 
   final TransferService _service = TransferService.instance;
 
