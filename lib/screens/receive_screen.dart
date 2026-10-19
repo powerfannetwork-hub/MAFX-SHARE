@@ -29,6 +29,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   bool _loading = false;
   String? _error;
   String? _openingPath;
+  bool _openingConnection = false;
 
   @override
   void initState() {
@@ -148,17 +149,39 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   Future<void> _openConnection() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => ConnectScreen(
-          category: widget.category,
-        ),
-      ),
-    );
+    if (_openingConnection) return;
 
-    if (mounted) {
-      await _loadReceivedFiles();
+    setState(() {
+      _openingConnection = true;
+    });
+
+    try {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => ConnectScreen(
+            category: widget.category,
+            role: TransferRole.receive,
+          ),
+        ),
+      );
+
+      if (mounted) {
+        await _loadReceivedFiles();
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Failed to open receive connection: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      _showMessage(
+        'Unable to open the receiving screen. Please try again.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _openingConnection = false;
+        });
+      }
     }
   }
 
@@ -214,11 +237,20 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         width: double.infinity,
         height: 54,
         child: FilledButton.icon(
-          onPressed: _openConnection,
-          icon: const Icon(Icons.wifi_rounded),
-          label: const Text(
-            'Connect and Receive',
-            style: TextStyle(fontWeight: FontWeight.bold),
+          onPressed: _openingConnection ? null : _openConnection,
+          icon: _openingConnection
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.qr_code_scanner_rounded),
+          label: Text(
+            _openingConnection ? 'Opening scanner...' : 'Scan to Receive',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           style: FilledButton.styleFrom(
             backgroundColor: _green,
@@ -285,8 +317,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 32),
             child: Text(
-              'Connect to another device to receive files. '
-              'Your received files will appear here.',
+              'Scan the sender QR code to connect. '
+              'Received files will appear here.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white38,
